@@ -1,0 +1,125 @@
+{
+  "schema_version": "0.1",
+  "cases": [
+    {
+      "id": "PC-001",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "read_file src/main.rs",
+      "expected": "allow",
+      "reason": "read-only preset fallback"
+    },
+    {
+      "id": "PC-002",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "write_file src/main.rs",
+      "expected": "ask",
+      "reason": "balanced mutation fallback"
+    },
+    {
+      "id": "PC-003",
+      "profile": "workspace_auto",
+      "sandbox": "workspace",
+      "scenario": "exec cargo test in verified isolation",
+      "expected": "allow",
+      "reason": "contained execution fallback"
+    },
+    {
+      "id": "PC-004",
+      "profile": "workspace_auto",
+      "sandbox": "off",
+      "scenario": "start run",
+      "expected": "startup_error",
+      "reason": "workspace_auto requires verified workspace sandbox"
+    },
+    {
+      "id": "PC-005",
+      "profile": "read_only",
+      "sandbox": "workspace",
+      "scenario": "exec git status",
+      "expected": "deny",
+      "reason": "inspection ceiling denies arbitrary exec"
+    },
+    {
+      "id": "PC-006",
+      "profile": "unrestricted",
+      "sandbox": "off",
+      "scenario": "read_file .env with explicit deny",
+      "expected": "deny",
+      "reason": "explicit deny dominates preset"
+    },
+    {
+      "id": "PC-007",
+      "profile": "unrestricted",
+      "sandbox": "off",
+      "scenario": "exec with explicit ask rule",
+      "expected": "ask",
+      "reason": "explicit ask dominates unrestricted"
+    },
+    {
+      "id": "PC-008",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "write path matches both deny and allow",
+      "expected": "deny",
+      "reason": "deny dominates specificity"
+    },
+    {
+      "id": "PC-009",
+      "profile": "workspace_auto",
+      "sandbox": "workspace",
+      "scenario": "MCP tool annotated read-only",
+      "expected": "ask",
+      "reason": "annotations do not prove absence of effects"
+    },
+    {
+      "id": "PC-010",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "symlink target outside permitted scope",
+      "expected": "deny",
+      "reason": "normalized target exceeds boundary"
+    },
+    {
+      "id": "PC-011",
+      "profile": "unrestricted",
+      "sandbox": "off",
+      "scenario": "exec shell without matching rules, user acknowledged",
+      "expected": "allow",
+      "reason": "host execution accepted; child behavior is not contained"
+    },
+    {
+      "id": "PC-012",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "execute with expired approval receipt",
+      "expected": "ask",
+      "reason": "receipt cannot authorize current action"
+    },
+    {
+      "id": "PC-013",
+      "profile": "workspace_auto",
+      "sandbox": "workspace",
+      "scenario": "start when tool network denial unavailable",
+      "expected": "startup_error",
+      "reason": "no silent host fallback"
+    },
+    {
+      "id": "PC-014",
+      "profile": "balanced",
+      "sandbox": "workspace",
+      "scenario": "required pre-hook times out",
+      "expected": "deny",
+      "reason": "required pre-hook fail closed"
+    },
+    {
+      "id": "PC-015",
+      "profile": "read_only",
+      "sandbox": "workspace",
+      "scenario": "allow rule matches write_file",
+      "expected": "deny",
+      "reason": "inspection ceiling precedes rule allows"
+    }
+  ]
+}

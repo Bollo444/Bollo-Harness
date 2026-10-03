@@ -1,0 +1,107 @@
+{
+  "Health": {
+    "status": "ok",
+    "api_version": "v1"
+  },
+  "Capabilities": {
+    "api_version": "v1",
+    "schema_version": "0.1",
+    "features": [
+      "sessions",
+      "runs",
+      "approvals",
+      "events",
+      "artifacts",
+      "policy"
+    ],
+    "sandbox_verified": true
+  },
+  "CreateSession": {
+    "label": "Parser fix"
+  },
+  "Session": {
+    "id": "ses_01",
+    "workspace_id": "ws_01",
+    "created_at": "2026-10-03T20:00:00Z",
+    "last_seq": 0
+  },
+  "CreateRun": {
+    "prompt": "Fix the parser and run its tests."
+  },
+  "Run": {
+    "id": "run_01",
+    "session_id": "ses_01",
+    "state": "queued",
+    "created_at": "2026-10-03T20:00:00Z",
+    "reason": null
+  },
+  "CancelResult": {
+    "run_id": "run_01",
+    "state": "cancelled"
+  },
+  "ApprovalResult": {
+    "approval_id": "ap_01",
+    "decision": "approve"
+  },
+  "Artifact": {
+    "id": "ar_01",
+    "run_id": "run_01",
+    "media_type": "text/plain",
+    "bytes": 42,
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "Policy": {
+    "revision": 1,
+    "profile": "balanced",
+    "sandbox": "workspace",
+    "isolation_verified": true,
+    "rules": [
+      {
+        "id": "private-env",
+        "effect": "deny",
+        "tool": "*",
+        "path_glob": "**/.env"
+      },
+      {
+        "id": "private-key",
+        "effect": "deny",
+        "tool": "*",
+        "path_glob": "**/*.pem"
+      }
+    ],
+    "provenance": [
+      {
+        "rule_id": "private-env",
+        "source": "~/.config/bollo/config.json",
+        "layer": "user"
+      },
+      {
+        "rule_id": "private-key",
+        "source": "~/.config/bollo/config.json",
+        "layer": "user"
+      }
+    ]
+  },
+  "Error": {
+    "code": "approval_required",
+    "message": "Interactive approval is needed.",
+    "request_id": "req_01",
+    "retryable": false
+  },
+  "Approval": {
+    "id": "ap_01",
+    "run_id": "run_01",
+    "tool_call_id": "tc_01",
+    "tool_name": "exec",
+    "intent_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "policy_revision": 1,
+    "expires_at": "2026-10-03T20:05:00Z",
+    "status": "pending",
+    "display_text": "argv: [\"cargo\", \"test\", \"--locked\"]\ncwd: /work/project\nenv: PATH only",
+    "display_complete": true,
+    "workspace_scope": "/work/project",
+    "sandbox": "workspace",
+    "reason": "balanced mutation fallback",
+    "rule_source": "preset:balanced"
+  }
+}

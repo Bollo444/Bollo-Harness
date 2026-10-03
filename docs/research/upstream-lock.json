@@ -1,0 +1,28 @@
+{
+  "retrieved_at": "2026-10-03",
+  "method": "shallow git clone; metadata/path inventory plus selected source inspection; no upstream build executed",
+  "repositories": [
+    {
+      "repository": "xai-org/grok-build",
+      "commit": "2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8",
+      "license_at_root": "Apache-2.0",
+      "tracked_files": 4487,
+      "inventory": "grok-build-file-inventory.csv",
+      "source_rev": "559751fdcec02d413e4c57c8832ab275e4f44980"
+    },
+    {
+      "repository": "superagent-ai/grok-cli",
+      "commit": "fb97af83f06dca873281d60168430f06c8de6324",
+      "license_at_root": "MIT",
+      "tracked_files": 175,
+      "inventory": "grok-cli-file-inventory.csv",
+      "source_rev": null
+    }
+  ],
+  "claude_code": {
+    "repository": "anthropics/claude-code",
+    "commit": "1c229fcd1e1e4e452e29a8f116b45fe4cfe2c528",
+    "evidence": "public README, LICENSE.md and live official documentation; no proprietary implementation source inspected",
+    "license": "All rights reserved"
+  }
+}

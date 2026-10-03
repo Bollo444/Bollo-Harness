@@ -1,0 +1,41 @@
+{
+  "schema_version": "0.1",
+  "provider": {
+    "kind": "anthropic",
+    "base_url": "https://api.anthropic.com",
+    "model": "REPLACE_WITH_AVAILABLE_MODEL_ID",
+    "credential_env": "ANTHROPIC_API_KEY",
+    "context_tokens": 200000
+  },
+  "permissions": {
+    "profile": "balanced",
+    "sandbox": "workspace",
+    "rules": [
+      {
+        "id": "private-env",
+        "effect": "deny",
+        "tool": "*",
+        "path_glob": "**/.env"
+      },
+      {
+        "id": "private-key",
+        "effect": "deny",
+        "tool": "*",
+        "path_glob": "**/*.pem"
+      }
+    ]
+  },
+  "limits": {
+    "max_tool_calls": 40,
+    "max_run_seconds": 600,
+    "max_output_tokens": 4096,
+    "max_spend_cents": 500,
+    "tool_output_bytes": 1048576
+  },
+  "privacy": {
+    "telemetry": false,
+    "content_retention_days": 30
+  },
+  "mcp_servers": [],
+  "hooks": []
+}

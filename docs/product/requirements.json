@@ -1,0 +1,226 @@
+{
+  "schema_version": "0.1",
+  "status": "proposed",
+  "requirements": [
+    {
+      "id": "BH-001",
+      "title": "Workspace discovery and trust",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-workspace",
+      "spec": "architecture/system-design.md",
+      "acceptance_test": "AT-001",
+      "acceptance": "Discover canonical root without executing project code; preserve dirty files and reject untrusted config escalation.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-002",
+      "title": "Two provider adapters",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-providers",
+      "spec": "architecture/context-and-providers.md",
+      "acceptance_test": "AT-002",
+      "acceptance": "Pass text/tool/fragment/error/cancel fixtures for Anthropic Messages and xAI Chat Completions with origin-bound credentials.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-003",
+      "title": "Bounded agent loop",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-core",
+      "spec": "architecture/runtime.md",
+      "acceptance_test": "AT-003",
+      "acceptance": "Complete deterministic edit/test workflow, serialize effects, stop at configured ceilings, and never dispatch partial tool arguments.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-004",
+      "title": "Typed built-in tools",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-tools",
+      "spec": "reference/tools.md",
+      "acceptance_test": "AT-004",
+      "acceptance": "Validate all seven tool schemas; reject malformed arguments and path escapes before effects.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-005",
+      "title": "Explainable permission presets",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-policy",
+      "spec": "security/permissions.md",
+      "acceptance_test": "AT-005",
+      "acceptance": "Apply four presets and deny/ask/allow precedence with provenance; demonstrate all policy fixtures including negative cases.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-006",
+      "title": "Verified execution boundary",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-workspace",
+      "spec": "security/permissions.md",
+      "acceptance_test": "AT-006",
+      "acceptance": "Probe filesystem and tool-network containment; refuse workspace_auto when required enforcement is absent; never silently run on host.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-007",
+      "title": "Scoped approvals",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-policy",
+      "spec": "ux/wireframes.md",
+      "acceptance_test": "AT-007",
+      "acceptance": "Bind approval to exact intent/hash/revision/expiry and atomically consume it; concurrent or stale requests cannot execute twice.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-008",
+      "title": "Durable sessions and recovery",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-store",
+      "spec": "architecture/data-model.md",
+      "acceptance_test": "AT-008",
+      "acceptance": "Kill at operation boundaries; resume as interrupted/unknown without auto-replaying side effects; retain ordered events.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-009",
+      "title": "Safe patches and restore",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-workspace",
+      "spec": "architecture/data-model.md",
+      "acceptance_test": "AT-009",
+      "acceptance": "Refuse stale preimages and ambiguous replacements; restore only matching postimages; preserve pre-existing user edits.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-010",
+      "title": "Usage and budgets",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-core",
+      "spec": "architecture/context-and-providers.md",
+      "acceptance_test": "AT-010",
+      "acceptance": "Track reservations, nullable unknown spend, tool/time/token ceilings; stop finite-spend runs when pricing is unknown.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-011",
+      "title": "Keyboard terminal UX",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-tui",
+      "spec": "ux/interaction-design.md",
+      "acceptance_test": "AT-011",
+      "acceptance": "Complete setup, approval, diff and recovery keyboard-only at 80 and 120 columns with no-color mode.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-012",
+      "title": "Deterministic headless interface",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-cli",
+      "spec": "reference/cli.md",
+      "acceptance_test": "AT-012",
+      "acceptance": "Emit schema-valid NDJSON only on stdout; ask without a user blocks with exit 3; cancellation maps to 130.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-013",
+      "title": "Bounded context and instructions",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-core",
+      "spec": "architecture/context-and-providers.md",
+      "acceptance_test": "AT-013",
+      "acceptance": "Record context provenance and preserve complete tool pairs during compaction; repository instructions never change permissions.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-014",
+      "title": "MCP stdio tools",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-extensions",
+      "spec": "reference/mcp.md",
+      "acceptance_test": "AT-014",
+      "acceptance": "Trust startup separately; negotiate pinned protocol, namespace tools, route through gate, and handle mid-call failure without replay.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-015",
+      "title": "Trusted lifecycle hooks",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-extensions",
+      "spec": "reference/hooks-and-plugins.md",
+      "acceptance_test": "AT-015",
+      "acceptance": "Before-hook veto/error/timeout denies action; after-hook failure cannot falsify results; no recursive authorization bypass.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-016",
+      "title": "Privacy and credential isolation",
+      "phase": "MVP",
+      "priority": "must",
+      "component": "bollo-store",
+      "spec": "security/privacy.md",
+      "acceptance_test": "AT-016",
+      "acceptance": "Seed secret canaries; verify no provider secrets in child env, normal logs or redacted exports; verify deletion and retention semantics.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-017",
+      "title": "Optional local HTTP API",
+      "phase": "P2",
+      "priority": "planned",
+      "component": "bollo-api",
+      "spec": "reference/api.md",
+      "acceptance_test": "AT-017",
+      "acceptance": "Conform to all OpenAPI routes; enforce bearer scopes, Host/Origin and workspace ownership; replay SSE and validate idempotency.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-018",
+      "title": "MCP Streamable HTTP",
+      "phase": "P2",
+      "priority": "planned",
+      "component": "bollo-extensions",
+      "spec": "reference/mcp.md",
+      "acceptance_test": "AT-018",
+      "acceptance": "Pass version/session/reconnect/OAuth/resource-binding/SSRF tests against independent reference servers.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-019",
+      "title": "ACP client adapter",
+      "phase": "P2",
+      "priority": "planned",
+      "component": "bollo-cli",
+      "spec": "reference/acp.md",
+      "acceptance_test": "AT-019",
+      "acceptance": "Negotiate a pinned ACP version and translate sessions/prompts/updates/permissions/cancel without creating a second tool gate.",
+      "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-020",
+      "title": "Read-only bounded subagents",
+      "phase": "P3",
+      "priority": "planned",
+      "component": "bollo-core",
+      "spec": "architecture/system-design.md",
+      "acceptance_test": "AT-020",
+      "acceptance": "Child cannot exceed parent capability or budget; cancellation propagates; read-only scope cannot mutate through shell or MCP.",
+      "implementation_status": "not_implemented"
+    }
+  ]
+}
