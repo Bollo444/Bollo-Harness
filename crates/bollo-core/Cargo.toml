@@ -1,0 +1,23 @@
+[package]
+name = "bollo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bollo-protocol = { path = "../bollo-protocol" }
+bollo-policy = { path = "../bollo-policy" }
+bollo-workspace = { path = "../bollo-workspace" }
+bollo-tools = { path = "../bollo-tools" }
+bollo-store = { path = "../bollo-store" }
+bollo-providers = { path = "../bollo-providers" }
+bollo-extensions = { path = "../bollo-extensions" }
+bollo-modes = { path = "../bollo-modes" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

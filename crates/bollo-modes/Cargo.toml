@@ -1,0 +1,9 @@
+[package]
+name = "bollo-modes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bollo-protocol = { path = "../bollo-protocol" }
+bollo-policy = { path = "../bollo-policy" }

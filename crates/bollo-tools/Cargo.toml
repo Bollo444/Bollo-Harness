@@ -1,0 +1,20 @@
+[package]
+name = "bollo-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bollo-protocol = { path = "../bollo-protocol" }
+bollo-policy = { path = "../bollo-policy" }
+bollo-workspace = { path = "../bollo-workspace" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+time.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

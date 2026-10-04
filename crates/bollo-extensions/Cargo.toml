@@ -1,0 +1,26 @@
+[package]
+name = "bollo-extensions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bollo-mcp-fake-server"
+path = "src/bin/mcp_fake_server.rs"
+
+[[bin]]
+name = "bollo-hook-fixture"
+path = "src/bin/hook_fixture.rs"
+
+[dependencies]
+bollo-protocol = { path = "../bollo-protocol" }
+bollo-workspace = { path = "../bollo-workspace" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

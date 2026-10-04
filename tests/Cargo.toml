@@ -1,0 +1,23 @@
+[package]
+name = "bollo-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "bollo-mcp-tests-fixture"
+path = "src/bin/mcp_fixture.rs"
+
+[dependencies]
+bollo-protocol = { path = "../crates/bollo-protocol" }
+bollo-policy = { path = "../crates/bollo-policy" }
+bollo-workspace = { path = "../crates/bollo-workspace" }
+bollo-tools = { path = "../crates/bollo-tools" }
+bollo-store = { path = "../crates/bollo-store" }
+bollo-providers = { path = "../crates/bollo-providers" }
+bollo-extensions = { path = "../crates/bollo-extensions" }
+bollo-modes = { path = "../crates/bollo-modes" }
+bollo-core = { path = "../crates/bollo-core" }
+serde_json.workspace = true
+tempfile.workspace = true
