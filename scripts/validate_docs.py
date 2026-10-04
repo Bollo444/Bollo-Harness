@@ -39,7 +39,7 @@ def no_duplicates(pairs):
 
 
 def load(path: Path):
-    return json.loads(path.read_text(), object_pairs_hook=no_duplicates)
+    return json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=no_duplicates)
 
 
 def validate(schema, value):
@@ -71,7 +71,7 @@ def main():
             check(operation.get('security', api['security']) != [], f'Unauthenticated route: {path}')
             check(operation['x-phase'] == 'P2', f'Unexpected API phase: {path}')
             check(operation['x-required-capability'] in ('read', 'run', 'approve'), f'Missing scope: {path}')
-            check(f'{method.upper()} {path}' in (DOCS / 'reference/api.md').read_text(), f'Undocumented route: {path}')
+            check(f'{method.upper()} {path}' in (DOCS / 'reference/api.md').read_text(encoding='utf-8'), f'Undocumented route: {path}')
     check(len(operation_ids) == len(set(operation_ids)), 'Duplicate operationId')
 
     for filename in ['config.balanced.json', 'config.workspace-auto.json']:
@@ -83,7 +83,7 @@ def main():
     check(len({c['id'] for c in policy_cases['cases']}) == len(policy_cases['cases']), 'Duplicate policy-case IDs')
 
     events = []
-    for line in (DOCS / 'examples/session.ndjson').read_text().splitlines():
+    for line in (DOCS / 'examples/session.ndjson').read_text(encoding='utf-8').splitlines():
         event = json.loads(line, object_pairs_hook=no_duplicates)
         validate(schemas['event.schema.json'], event)
         events.append(event)
@@ -126,8 +126,8 @@ def main():
     registry = load(DOCS / 'product/requirements.json')['requirements']
     check([r['id'] for r in registry] == [f'BH-{i:03}' for i in range(1, 21)], 'Requirement IDs missing/reordered')
     check(len({r['acceptance_test'] for r in registry}) == len(registry), 'Duplicate acceptance IDs')
-    trace = (DOCS / 'product/traceability.md').read_text()
-    tests = (DOCS / 'delivery/testing.md').read_text()
+    trace = (DOCS / 'product/traceability.md').read_text(encoding='utf-8')
+    tests = (DOCS / 'delivery/testing.md').read_text(encoding='utf-8')
     for requirement in registry:
         check((DOCS / requirement['spec']).is_file(), f'Missing spec: {requirement}')
         check(requirement['id'] in trace and requirement['acceptance_test'] in trace, f'Traceability missing: {requirement}')
@@ -139,10 +139,10 @@ def main():
     known_tests = {r['acceptance_test'] for r in registry}
 
     markdown = [ROOT / 'README.md', *DOCS.rglob('*.md')]
-    atlas = (DOCS / 'README.md').read_text()
+    atlas = (DOCS / 'README.md').read_text(encoding='utf-8')
     diagrams = 0
     for file in markdown:
-        text = file.read_text()
+        text = file.read_text(encoding='utf-8')
         check(len(re.findall(r'^```', text, re.M)) % 2 == 0, f'Unbalanced fenced blocks: {file}')
         diagrams += len(re.findall(r'^```mermaid\s*$', text, re.M))
         for match in re.finditer(r'\b(?:BH|AT)-\d{3}\b', text):
@@ -165,7 +165,7 @@ def main():
     inventory_rows = 0
     for repo in lock['repositories']:
         check(bool(re.fullmatch('[0-9a-f]{40}', repo['commit'])), 'Invalid pinned upstream commit')
-        with (DOCS / 'research' / repo['inventory']).open(newline='') as f:
+        with (DOCS / 'research' / repo['inventory']).open(newline='', encoding='utf-8') as f:
             rows = list(csv.DictReader(f))
         check(len(rows) == repo['tracked_files'], 'Source inventory count mismatch')
         check(len({r['path'] for r in rows}) == len(rows), 'Duplicate source inventory path')

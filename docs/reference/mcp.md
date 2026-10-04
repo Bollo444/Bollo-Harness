@@ -24,6 +24,23 @@ executor as an unauthenticated MCP server. ACP is a different client/agent proto
    and treat content as untrusted context. Results cannot authorize new permissions.
 7. On shutdown close stdin, wait bounded time, then terminate/reap the child process group.
 
+In this implementation pass the host trust action is an enabled entry in the trusted user
+configuration (project configuration cannot add servers); the grant binds the resolved
+executable bytes, exact argv, working directory and requested environment names, and is
+re-verified at launch. `bollo mcp list` stays read-only and starts nothing; servers are
+launched and discovered only when a turn is about to execute, so inspection commands do
+not spawn children. A failed start/handshake/discovery is a warning, not a fatal error:
+that server's tools simply never enter the model-facing list.
+
+A server that announces `notifications/tools/list_changed` is re-listed: the host drains
+announcements between turns and immediately after every executed call, and the refreshed
+catalog governs the next model request and the next prepare/policy decision. An added
+tool must pass the full gate before it can be called; a removed tool is refused as unknown
+before policy; a server that fails to re-list is quarantined. Approval binding covers the
+exact prepared arguments and the policy revision, and does not yet cover the tool
+input-schema fingerprint, so a same-name schema change does not by itself invalidate an
+already-issued receipt.
+
 Use UTF-8 newline-delimited JSON-RPC on stdio; stdout only protocol, stderr logs.
 Handshake deadline 10s, list deadline 10s, call deadline 60s by default (bounded by run
 budget). Maximum 100 tools/server, 256 KiB schema catalog, 1 MiB result capture; these
@@ -85,5 +102,7 @@ P2 needs a separate full OAuth/interoperability review before support is claimed
 
 Clean handshake; mismatched versions; invalid schemas; duplicate aliases; paging loop;
 list_changed during approval; result marked error; huge stdout; invalid JSON-RPC;
-process exit mid-call; ignored cancel; malicious instructions; env leakage; changed
+process exit mid-call (exercised end-to-end: the `die` fixture tool exits during
+`tools/call`, the effect is journaled `unknown`, the server is quarantined and resume
+refuses to replay it); ignored cancel; malicious instructions; env leakage; changed
 executable; untrusted project activation; network restrictions actually enforced.

@@ -21,10 +21,48 @@ remove model-provider restrictions.
 
 ## What exists
 
-Research, original design documents, machine-readable **proposed** contracts, example
-fixtures, and a documentation validator. CLI commands in the specifications are
-future interfaces, not installed commands. Rust source paths in the proposed tree do
-not exist yet. Upstream code was inspected but was not copied into this repository.
+Research, original design documents, machine-readable contracts, example fixtures, and a
+documentation validator — plus, as of this pass, the **MVP harness itself**: a Rust
+workspace implementing BH-001…BH-016 exactly as specified in [HARNESS_SPEC.md](HARNESS_SPEC.md).
+Upstream code was inspected but was not copied into this repository.
+
+| Crate | Responsibility |
+|---|---|
+| `bollo-protocol` | ids, closed event envelopes + validation, error codes, NDJSON codec, policy commands |
+| `bollo-policy` | pure evaluator, config layers, intent normalization, approval receipts, non-forgeable `Authorization` gate |
+| `bollo-workspace` | canonical root identity, handle-relative fs, patch checkpoints, child process broker, sandbox probe |
+| `bollo-tools` | one schema-backed registry; `read_file`, `search`, `write_file`, `apply_patch`, `exec`, `git_status`, `git_diff`, plus discovered MCP tools (`mcp:<server>:<tool>`) |
+| `bollo-store` | SQLite journal (WAL, `synchronous=FULL`), operations ledger, checkpoints, content-addressed artifacts, migrations |
+| `bollo-providers` | normalized provider port, stream assembler, anthropic + xAI adapters, deterministic fakes |
+| `bollo-extensions` | trusted command hooks, MCP stdio client (protocol `2025-11-25`), executable-identity trust records |
+| `bollo-modes` | inspect / plan / build / parallel / headless descriptors that constrain but never widen |
+| `bollo-core` | the per-step loop, scheduler (one effect at a time), context + compaction, integer budget |
+| `bollo-cli` | `bollo` binary: flags, composition root, headless NDJSON renderer, exit codes 0/1/2/3/4/5/130 |
+| `bollo-tui` | interactive client over the same event stream: transcript, approvals, slash commands, 80/120-column paths |
+
+## Build and verify
+
+```sh
+cargo build --workspace            # clean, no warnings
+cargo test  --workspace            # 234 tests: unit, contract, policy fixtures, loop, recovery, MCP gate
+```
+
+Headless runs need no network. Use the built-in deterministic replay provider:
+
+```sh
+# host mode must be chosen explicitly; the probe reports no isolation on Windows
+bollo run --sandbox off --acknowledge-risk --provider replay --script script.json \
+          --output ndjson --prompt "fix the parser and run the tests"
+```
+
+An **ask** blocks headless runs with `approval_required` and exit 3; it never defaults to
+yes. An enabled MCP server in the trusted user configuration is trusted, started and
+discovered before a turn; its tools are advertised to the model and every call still
+passes policy, mode, approval and the operation journal — an MCP call under `balanced`
+asks like any external effect. Live HTTPS transports are feature-gated
+(`--features live-http`) and off by default.
+On this Windows/MSVC checkout the sandbox probe correctly reports `Unavailable`, so
+`workspace_auto` refuses to start instead of pretending isolation.
 
 ## Validate the documentation
 
