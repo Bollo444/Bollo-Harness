@@ -1,0 +1,9 @@
+{
+  "name": "apply_patch",
+  "arguments": {
+    "path": "src/main.rs",
+    "old_text": "return 0;",
+    "new_text": "return 1;",
+    "expected_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

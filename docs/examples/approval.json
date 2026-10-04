@@ -1,0 +1,6 @@
+{
+  "decision": "approve",
+  "intent_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "policy_revision": 1,
+  "note": "Approve this exact action only."
+}

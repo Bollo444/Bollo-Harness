@@ -1,0 +1,306 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "0.1"
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "xai"
+          ]
+        },
+        "base_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 8192
+        },
+        "input_microusd_per_token": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_microusd_per_token": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "kind",
+        "base_url",
+        "model",
+        "credential_env",
+        "context_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "permissions": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "read_only",
+            "balanced",
+            "workspace_auto",
+            "unrestricted"
+          ]
+        },
+        "sandbox": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "off"
+          ]
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+              },
+              "effect": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "ask",
+                  "deny"
+                ]
+              },
+              "tool": {
+                "type": "string",
+                "minLength": 1
+              },
+              "path_glob": {
+                "type": "string",
+                "minLength": 1
+              },
+              "argv_prefix": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "id",
+              "effect",
+              "tool"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "profile",
+        "sandbox",
+        "rules"
+      ],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "max_run_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_spend_cents": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_output_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 10485760
+        }
+      },
+      "required": [
+        "max_tool_calls",
+        "max_run_seconds",
+        "max_output_tokens",
+        "max_spend_cents",
+        "tool_output_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {
+        "telemetry": {
+          "const": false
+        },
+        "content_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        }
+      },
+      "required": [
+        "telemetry",
+        "content_retention_days"
+      ],
+      "additionalProperties": false
+    },
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "transport": {
+            "const": "stdio"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env_allowlist": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            },
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "enabled",
+          "transport",
+          "command",
+          "args",
+          "env_allowlist"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "hooks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "event": {
+            "type": "string",
+            "enum": [
+              "before_tool",
+              "after_tool"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "argv": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "id",
+          "event",
+          "enabled",
+          "argv",
+          "timeout_seconds"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "provider",
+    "permissions",
+    "limits",
+    "privacy",
+    "mcp_servers",
+    "hooks"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bollo trusted user configuration proposal v0.1",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "permissions": {
+            "properties": {
+              "profile": {
+                "const": "workspace_auto"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "properties": {
+              "sandbox": {
+                "const": "workspace"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

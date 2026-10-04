@@ -1,0 +1,14 @@
+# Research checkouts and generated documentation previews
+.cache/
+.research/
+.site/
+.venv/
+__pycache__/
+node_modules/
+target/
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+.bollo/state/
+*.sqlite*

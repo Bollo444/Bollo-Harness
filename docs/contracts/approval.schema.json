@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "deny"
+      ]
+    },
+    "intent_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "policy_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 2000
+    }
+  },
+  "required": [
+    "decision",
+    "intent_hash",
+    "policy_revision"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

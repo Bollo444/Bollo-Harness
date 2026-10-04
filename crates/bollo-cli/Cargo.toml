@@ -1,0 +1,42 @@
+[package]
+name = "bollo-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bollo"
+path = "src/main.rs"
+
+# Test fixture only: the fake MCP stdio server used by CLI integration tests.
+[[bin]]
+name = "bollo-mcp-fixture"
+path = "src/bin/mcp_fixture.rs"
+
+[features]
+default = []
+# Opt-in live HTTPS transport for the anthropic/xai adapters. Tests never need
+# it: the deterministic `replay` provider drives the whole loop offline.
+live-http = ["bollo-providers/live-http"]
+
+[dependencies]
+bollo-protocol = { path = "../bollo-protocol" }
+bollo-policy = { path = "../bollo-policy" }
+bollo-workspace = { path = "../bollo-workspace" }
+bollo-tools = { path = "../bollo-tools" }
+bollo-store = { path = "../bollo-store" }
+bollo-providers = { path = "../bollo-providers" }
+bollo-extensions = { path = "../bollo-extensions" }
+bollo-modes = { path = "../bollo-modes" }
+bollo-core = { path = "../bollo-core" }
+bollo-tui = { path = "../bollo-tui" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+ctrlc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+bollo-store = { path = "../bollo-store" }
