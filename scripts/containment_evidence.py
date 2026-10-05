@@ -229,7 +229,9 @@ def tail(path: Path, lines: int) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument('--tail', type=int, default=40,
                         help='lines of failing output to print (default: 40)')
     parser.add_argument('--host', action='store_true',
