@@ -152,17 +152,85 @@ pub fn create_workspace_sandbox(workspace: &Path) -> Result<Option<Box<dyn Child
 /// effective ones, and the credential stores under both are excluded. Missing
 /// trees are skipped: there is nothing to grant.
 ///
+/// The homes are not the whole answer: a managed host (a CI runner image, a
+/// toolcache install) can keep the toolchain the host itself runs somewhere
+/// else. [`effective_toolchain_roots`] asks the host's own tools where that
+/// is — the `rustc --print sysroot` answer and the cargo/rustc executable
+/// directories — so a contained build never dies with an access error for a
+/// toolchain the host runs fine.
+///
 /// The cargo home itself is deliberately never a grant root: only its
 /// `bin`, `registry` and `git` subtrees are, so `credentials.toml` sits outside
 /// every grant. `config.toml` is granted as a single file.
 pub fn toolchain_access() -> ToolchainAccess {
     let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-    toolchain_access_from(
+    let mut access = toolchain_access_from(
         env_path("RUSTUP_HOME"),
         env_path("CARGO_HOME"),
         profile.as_ref().map(|home| home.join(".rustup")),
         profile.as_ref().map(|home| home.join(".cargo")),
-    )
+    );
+    merge_roots(&mut access, effective_toolchain_roots());
+    access
+}
+
+/// Add discovered roots to `access`, keeping existing directories only and
+/// dropping duplicates: discovery depends on the host's tool layout, the grant
+/// list must not.
+fn merge_roots(access: &mut ToolchainAccess, extras: Vec<PathBuf>) {
+    for root in extras {
+        if root.is_dir() && !access.read_roots.contains(&root) {
+            access.read_roots.push(root);
+        }
+    }
+}
+
+/// Roots of the toolchain the *host* actually runs, as the host's own tools
+/// report it: `rustc --print sysroot` (a rustup toolchain answers with its
+/// toolchain directory, a standalone unpack with its install directory) plus
+/// the directories the cargo/rustc executables live in (`RUSTC`/`CARGO` when
+/// set, otherwise the first hit on `PATH`).
+fn effective_toolchain_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut push = |path: PathBuf| {
+        if path.is_dir() && !roots.contains(&path) {
+            roots.push(path);
+        }
+    };
+    if let Some(rustc) = host_executable("RUSTC", "rustc") {
+        if let Some(sysroot) = command_stdout(&rustc, &["--print", "sysroot"]) {
+            push(PathBuf::from(sysroot));
+        }
+    }
+    for (variable, name) in [("RUSTC", "rustc"), ("CARGO", "cargo")] {
+        if let Some(exe) = host_executable(variable, name) {
+            if let Some(dir) = exe.parent() {
+                push(dir.to_path_buf());
+            }
+        }
+    }
+    roots
+}
+
+/// The executable the host would launch for `variable`/`name`: the explicit
+/// variable first (cargo sets `CARGO` for the test processes it spawns), then
+/// `PATH` with the platform executable suffix.
+fn host_executable(variable: &str, name: &str) -> Option<PathBuf> {
+    if let Some(explicit) = env_path(variable).filter(|path| path.is_file()) {
+        return Some(explicit);
+    }
+    find_on_path(&format!("{name}{}", std::env::consts::EXE_SUFFIX)).map(PathBuf::from)
+}
+
+/// First line of `exe args`' stdout on the host, when the command succeeds.
+fn command_stdout(exe: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(exe).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next()?.trim().to_string();
+    (!line.is_empty()).then_some(line)
 }
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -446,6 +514,46 @@ mod tests {
         assert!(absent.read_files.is_empty());
         assert!(absent.excluded_files.is_empty());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn effective_roots_are_merged_only_when_they_exist() {
+        let base =
+            std::env::temp_dir().join(format!("bollo-effective-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let present = base.join("sysroot");
+        std::fs::create_dir_all(&present).unwrap();
+        let mut access = ToolchainAccess::default();
+        merge_roots(
+            &mut access,
+            vec![present.clone(), base.join("absent"), present.clone()],
+        );
+        assert_eq!(access.read_roots, vec![present]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn discovery_follows_the_host_toolchain() {
+        // The host's own answer is the authority: when this machine runs a
+        // rustc, its reported sysroot must be discovered, so a toolchain kept
+        // outside the default homes is still granted (the failure that put
+        // this test here: a runner's cargo resolved a rustc outside every
+        // grant and died with `Access is denied`).
+        let discovered = effective_toolchain_roots();
+        for root in &discovered {
+            assert!(root.is_dir(), "{} is not a directory", root.display());
+        }
+        let Some(rustc) = host_executable("RUSTC", "rustc") else {
+            return;
+        };
+        let Some(sysroot) = command_stdout(&rustc, &["--print", "sysroot"]) else {
+            return;
+        };
+        let sysroot = normalized(Path::new(sysroot.trim()));
+        assert!(
+            discovered.iter().any(|root| normalized(root) == sysroot),
+            "sysroot {sysroot} missing from discovered roots: {discovered:#?}"
+        );
     }
 
     #[test]

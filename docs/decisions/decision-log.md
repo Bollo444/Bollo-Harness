@@ -132,7 +132,12 @@ AppContainer SID for containment, while the *grants* hang off two stable
 derived capability SIDs: a host-wide toolchain capability (read+execute on the
 rustup home and the cargo `bin`/`registry`/`git` trees, `config.toml` as a
 single file) and a per-workspace capability (modify on that workspace's
-canonical root). Each granted root receives one inheritable ACE; Windows
+canonical root). The toolchain set follows the host's *effective* toolchain
+— its `rustc --print sysroot` answer and the directories its cargo/rustc
+executables live in — next to the environment-derived homes, because a
+runner image that keeps its toolchain elsewhere would otherwise execute
+rustc outside every grant. Each granted root receives one inheritable ACE;
+Windows
 propagates it to existing descendants and inheritance covers later additions,
 and a root that already carries the marker ACE is left untouched. Credential
 stores are excluded structurally: the cargo home root is never a grant root,

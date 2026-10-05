@@ -69,6 +69,17 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
         !access.read_roots.is_empty(),
         "no host toolchain found; this test needs a Rust toolchain"
     );
+    // Red-run evidence: a failing test prints these lines, so a failure seen
+    // only on a runner can be read from the log. The container-side probe shows
+    // which rustc/cargo the child resolves, next to what it may read.
+    println!("host cargo: {}", host_cargo().display());
+    println!("grant roots: {:#?}", access.read_roots);
+    println!("grant files: {:#?}", access.read_files);
+    let resolved = container.run(&request(&["where", "rustc", "cargo"], &workspace));
+    println!(
+        "container where rustc/cargo: exit={:?}\n{}",
+        resolved.exit_code, resolved.stdout
+    );
     for root in &access.read_roots {
         container
             .grant_toolchain_read(root)

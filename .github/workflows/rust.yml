@@ -21,6 +21,12 @@ jobs:
           rustup default 1.93.1
           rustc --version
           cargo --version
+          # Layout evidence: the containment grants follow the toolchain the
+          # host actually runs, so a red run can be read from the log.
+          rustc --print sysroot
+          rustup toolchain list
+          where.exe cargo rustc
+          Write-Host "USERPROFILE=$env:USERPROFILE RUSTUP_HOME=$env:RUSTUP_HOME CARGO_HOME=$env:CARGO_HOME"
       - name: Build workspace
         run: cargo build --workspace --locked
       - name: Test workspace (bollo-api excluded)

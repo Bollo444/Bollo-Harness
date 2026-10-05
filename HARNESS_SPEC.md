@@ -173,8 +173,12 @@ pub struct NormalizedIntent { pub tool: String, pub tool_class: ToolClass,
   container and attaches three identities: a fresh per-run AppContainer SID
   (containment only, no resource grants) plus two stable derived capability
   SIDs — one shared by every run on the host for the toolchain read grants
-  (the rustup home, cargo `bin`/`registry`/`git`, and `config.toml` as a
-  single file), one per canonical workspace for its modify grant. Only the
+  (the rustup home, cargo `bin`/`registry`/`git`, `config.toml` as a single
+  file, and every root the host's own account of its toolchain reports:
+  `rustc --print sysroot` plus the directories its cargo/rustc executables
+  live in — a runner image keeping its toolchain outside the default
+  homes is covered instead of launching into an access error), one per
+  canonical workspace for its modify grant. Only the
   root of each granted tree receives an inheritable ACE: Windows propagates it
   to existing descendants and inheritance covers everything created later, so
   there is no tree walk, and a root that already carries the marker ACE is
@@ -403,7 +407,11 @@ first-class test doubles, not mocks of the code under test.
 - Windows host read grants: a contained `cargo`/`rustc` needs host paths the
   container does not own, so workspace mode grants read+execute on the
   toolchain and package caches and modify on the workspace, both through
-  stable capability SIDs (ADR-012). Two measured boundaries belong here.
+  stable capability SIDs (ADR-012). The toolchain set is discovered from
+  the host itself — the environment-derived homes next to the
+  `rustc --print sysroot` answer and the cargo/rustc executable directories
+  — so a toolchain kept outside the default locations is still granted.
+  Two measured boundaries belong here.
   First, capability SIDs receive access through allow ACEs only: a deny ACE
   does not override an inherited allow, so credential exclusion is structural
   (a store is never inside a granted root; a conflict refuses the run) rather

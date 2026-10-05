@@ -126,6 +126,10 @@ The Windows backend carries its grants on stable derived capability SIDs: a
 host-wide toolchain capability with read+execute on the rustup home and the
 cargo `bin`/`registry`/`git` trees (`config.toml` is granted as a single file),
 and a per-workspace capability with modify on that workspace's canonical root.
+The toolchain set follows the host's own account of its toolchain: the roots
+its `rustc --print sysroot` and its cargo/rustc executables report are granted
+next to the environment-derived homes, so a managed host (a runner image, a
+toolcache install) cannot leave a contained build parsing an ungranted rustc.
 Each granted root takes one inheritable ACE; Windows propagates it to the
 existing tree and inheritance covers later additions. Credential stores
 (`~/.cargo/credentials.toml` and the legacy `credentials`) are never inside a
