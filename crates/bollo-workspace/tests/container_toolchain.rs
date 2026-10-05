@@ -136,6 +136,37 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
             rustc.display(),
             host_command("icacls", &[&rustc.display().to_string()])
         );
+        // A DACL that grants the capability is not the whole gate: a mandatory
+        // integrity label above the container's level, or an image hardlinked
+        // from a differently labelled tree, fails CreateProcess while leaving
+        // READ_CONTROL (what `icacls` needs) intact. Report both.
+        println!(
+            "host labels and links:\n{}",
+            host_command(
+                "powershell",
+                &[
+                    "-NoProfile",
+                    "-Command",
+                    &format!(
+                        "'{}','{}','{}' | ForEach-Object {{ \
+                         $a = Get-Acl $_ -Audit; \
+                         $l = ($a.Audit | ForEach-Object {{ $_.IdentityReference.Value \
+                         + ':' + $_.AuditFlags }}) -join '; '; \
+                         \"$_ -> links=$((Get-Item $_).LinkType) label[$l]\" }}",
+                        rustc.display(),
+                        bin.display(),
+                        workspace.display()
+                    )
+                ]
+            )
+        );
+        println!(
+            "host hardlinks rustc:\n{}",
+            host_command(
+                "fsutil",
+                &["hardlink", "list", &rustc.display().to_string()]
+            )
+        );
         probe(
             &container,
             &workspace,
