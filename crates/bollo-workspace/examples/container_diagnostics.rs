@@ -37,6 +37,7 @@ mod diag {
     use bollo_workspace::sandbox::{build_tool_environment, toolchain_access};
     use bollo_workspace::sandbox_win::AppContainer;
 
+    use std::os::windows::process::CommandExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, LocalFree, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
@@ -44,6 +45,7 @@ mod diag {
         ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
         GetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Security::{
         GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenAppContainerSid,
         TokenCapabilities, TokenGroups, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
@@ -53,11 +55,17 @@ mod diag {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-        FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
+        FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Diagnostics::Debug::{
         FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
+    };
+    use windows_sys::Win32::System::JobObjects::{
+        IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
     };
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY,
@@ -65,8 +73,12 @@ mod diag {
         REG_QWORD, REG_SZ, REG_VALUE_TYPE,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetCurrentProcess, GetExitCodeProcess, IsWow64Process, OpenProcessToken,
-        WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_INFORMATION, STARTUPINFOW,
+        CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, IsWow64Process, OpenProcessToken,
+        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB,
+        CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+        PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW, STARTUPINFOW,
     };
 
     /// Probe output never grows past this; the report is evidence, not a dump.
@@ -189,6 +201,8 @@ mod diag {
             }
             if let Some(rustc) = real_rustc(candidates) {
                 argv.push("--rustc".into());
+                argv.push(rustc.display().to_string());
+                argv.push("--matrix".into());
                 argv.push(rustc.display().to_string());
             }
 
@@ -432,6 +446,7 @@ mod diag {
 
     fn child_mode(args: &[String]) {
         let report_path = arg_value(args, "--report").unwrap_or_else(|| "child-report.json".into());
+        let matrix_path = arg_value(args, "--matrix").map(PathBuf::from);
         let candidates: Vec<PathBuf> = arg_values(args, "--candidate")
             .into_iter()
             .map(PathBuf::from)
@@ -459,6 +474,8 @@ mod diag {
             "path_resolution": path_resolution(),
             "parent_chains": chains_for(&candidates),
             "probes": candidates.iter().map(|c| exec_probe(c)).collect::<Vec<_>>(),
+            "job": job_report(),
+            "process_matrix": matrix_path.as_deref().map(process_matrix),
             "cargo": cargo_report(cargo.as_deref(), rustc.as_deref(), toy.as_deref(), toy_forced.as_deref()),
             "policy": policy_report(),
             "code_integrity": code_integrity_report(),
@@ -670,6 +687,310 @@ mod diag {
                 "stderr": truncate(&String::from_utf8_lossy(&output.stderr), 300),
             }),
             Err(err) => json!({"error": err.to_string(), "raw": err.raw_os_error()}),
+        }
+    }
+
+    /// One `CreateProcessW` variant per parameter a caller can change. On the
+    /// runner, raw creation with nothing but the application name succeeds
+    /// inside the container while `std::process::Command` is denied, so the
+    /// matrix isolates which parameter the denial follows: handle inheritance,
+    /// the environment block, the unicode-environment flag, stdio handles, the
+    /// handle list, breakaway-from-job, or a console.
+    fn process_matrix(path: &Path) -> Value {
+        let name = wide(&path.to_string_lossy());
+        let base_line = format!("\"{}\" --version", path.display());
+        let environment = environment_block();
+        let plain = plain_startup();
+        let mut variants = vec![
+            matrix_entry("raw_appname_noinherit", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    0,
+                    std::ptr::null(),
+                    CREATE_NO_WINDOW,
+                    &plain,
+                )
+            }),
+            matrix_entry("raw_appname_inherit", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    1,
+                    std::ptr::null(),
+                    CREATE_NO_WINDOW,
+                    &plain,
+                )
+            }),
+            matrix_entry("raw_no_appname_noinherit", unsafe {
+                create_core(
+                    std::ptr::null(),
+                    &mut wide(&base_line),
+                    0,
+                    std::ptr::null(),
+                    CREATE_NO_WINDOW,
+                    &plain,
+                )
+            }),
+            matrix_entry("raw_appname_env_unicode", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    0,
+                    environment.as_ptr() as *const c_void,
+                    CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                    &plain,
+                )
+            }),
+            matrix_entry("raw_appname_inherit_env_unicode", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    1,
+                    environment.as_ptr() as *const c_void,
+                    CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                    &plain,
+                )
+            }),
+            matrix_entry("raw_appname_breakaway", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    0,
+                    std::ptr::null(),
+                    CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB,
+                    &plain,
+                )
+            }),
+        ];
+        if let Some(handles) = unsafe { nul_handles() } {
+            variants.push(matrix_entry("raw_appname_inherit_stdio_nul", unsafe {
+                create_core(
+                    name.as_ptr(),
+                    &mut wide(&base_line),
+                    1,
+                    std::ptr::null(),
+                    CREATE_NO_WINDOW,
+                    &nul_startup(&handles),
+                )
+            }));
+            variants.push(matrix_entry(
+                "raw_appname_inherit_stdio_nul_handle_list",
+                unsafe { create_with_handle_list(&name, &mut wide(&base_line), &handles) },
+            ));
+            for handle in handles {
+                unsafe {
+                    CloseHandle(handle);
+                }
+            }
+        }
+        variants.push(matrix_entry(
+            "std_pipes",
+            command_variant(path, false, false),
+        ));
+        variants.push(matrix_entry("std_null", command_variant(path, true, false)));
+        variants.push(matrix_entry(
+            "std_null_no_window",
+            command_variant(path, true, true),
+        ));
+        json!(variants)
+    }
+
+    fn matrix_entry(variant: &str, result: Value) -> Value {
+        json!({"variant": variant, "result": result})
+    }
+
+    /// The shape the launcher itself uses, plus the environment block: a
+    /// Unicode environment is what `std::process::Command` always supplies.
+    fn environment_block() -> Vec<u16> {
+        let mut block = Vec::new();
+        for (key, value) in std::env::vars() {
+            block.extend(format!("{key}={value}").encode_utf16());
+            block.push(0);
+        }
+        block.push(0);
+        block
+    }
+
+    fn plain_startup() -> STARTUPINFOW {
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        startup
+    }
+
+    unsafe fn nul_handles() -> Option<[HANDLE; 3]> {
+        let mut attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        let nul = wide("NUL");
+        let mut handles: Vec<HANDLE> = Vec::new();
+        for _ in 0..3 {
+            let handle = CreateFileW(
+                nul.as_ptr(),
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                &mut attributes,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            );
+            if handle == INVALID_HANDLE_VALUE {
+                for existing in handles {
+                    CloseHandle(existing);
+                }
+                return None;
+            }
+            handles.push(handle);
+        }
+        Some([handles[0], handles[1], handles[2]])
+    }
+
+    fn nul_startup(handles: &[HANDLE; 3]) -> STARTUPINFOW {
+        let mut startup = plain_startup();
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = handles[0];
+        startup.hStdOutput = handles[1];
+        startup.hStdError = handles[2];
+        startup
+    }
+
+    unsafe fn create_core(
+        application: *const u16,
+        line: &mut [u16],
+        inherit: i32,
+        environment: *const c_void,
+        flags: u32,
+        startup: &STARTUPINFOW,
+    ) -> Value {
+        let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+        let created = CreateProcessW(
+            application,
+            line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            inherit,
+            flags,
+            environment,
+            std::ptr::null(),
+            startup,
+            &mut info,
+        );
+        if created == 0 {
+            return json!({"created": false, "error": code_text(GetLastError())});
+        }
+        let wait = WaitForSingleObject(info.hProcess, 30_000);
+        let mut code: u32 = 0;
+        let got = GetExitCodeProcess(info.hProcess, &mut code);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        json!({
+            "created": true,
+            "wait_completed": wait == WAIT_OBJECT_0,
+            "exit": if got != 0 { Some(code) } else { None },
+        })
+    }
+
+    unsafe fn create_with_handle_list(
+        name: &[u16],
+        line: &mut [u16],
+        handles: &[HANDLE; 3],
+    ) -> Value {
+        let mut size: usize = 0;
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size);
+        if size == 0 {
+            return json!({"created": false, "error": format!("attribute list size: {}", code_text(GetLastError()))});
+        }
+        let mut memory = vec![0u8; size];
+        let list = memory.as_mut_ptr() as *mut c_void;
+        if InitializeProcThreadAttributeList(list, 1, 0, &mut size) == 0 {
+            return json!({"created": false, "error": format!("InitializeProcThreadAttributeList: {}", code_text(GetLastError()))});
+        }
+        let updated = UpdateProcThreadAttribute(
+            list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            handles.as_ptr() as *const c_void,
+            std::mem::size_of_val(handles),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+        if updated == 0 {
+            let error = code_text(GetLastError());
+            DeleteProcThreadAttributeList(list);
+            return json!({"created": false, "error": format!("UpdateProcThreadAttribute: {error}")});
+        }
+        let mut startup: STARTUPINFOEXW = std::mem::zeroed();
+        startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = handles[0];
+        startup.StartupInfo.hStdOutput = handles[1];
+        startup.StartupInfo.hStdError = handles[2];
+        startup.lpAttributeList = list;
+        let result = create_core(
+            name.as_ptr(),
+            line,
+            1,
+            std::ptr::null(),
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+            &startup.StartupInfo,
+        );
+        DeleteProcThreadAttributeList(list);
+        result
+    }
+
+    fn command_variant(path: &Path, null_stdio: bool, no_window: bool) -> Value {
+        let mut command = std::process::Command::new(path);
+        command.arg("--version");
+        if null_stdio {
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
+        if no_window {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        match command.output() {
+            Ok(output) => json!({"exit": output.status.code()}),
+            Err(err) => json!({"error": err.to_string(), "raw": err.raw_os_error()}),
+        }
+    }
+
+    /// The job the container child is in. A breakaway request that the job does
+    /// not allow fails with exactly ERROR_ACCESS_DENIED, so the flags here
+    /// decide whether that is a possible cause.
+    fn job_report() -> Value {
+        unsafe {
+            let mut in_job: i32 = 0;
+            let queried_presence =
+                IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            let mut returned: u32 = 0;
+            let queried_limits = QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectExtendedLimitInformation,
+                &mut info as *mut _ as *mut c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                &mut returned,
+            );
+            let flags = if queried_limits != 0 {
+                info.BasicLimitInformation.LimitFlags
+            } else {
+                0
+            };
+            json!({
+                "presence_query_ok": queried_presence != 0,
+                "in_job": in_job != 0,
+                "limit_query_ok": queried_limits != 0,
+                "limit_flags": flags,
+                "breakaway_ok": flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0,
+                "silent_breakaway_ok": flags & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK != 0,
+                "kill_on_job_close": flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
+                "active_process_limited": flags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0,
+                "active_process_limit": info.BasicLimitInformation.ActiveProcessLimit,
+            })
         }
     }
 
