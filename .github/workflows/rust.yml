@@ -55,9 +55,11 @@ jobs:
         run: cargo test -p bollo-api --no-fail-fast --locked -- --test-threads=1
 
       # Save even when a test above failed, so a red run still warms the next
-      # one. The restore step computed the key; an exact hit makes this a no-op.
+      # one, but skip it on an exact hit: the service refuses a duplicate key
+      # (run 37267857740 logged "Unable to reserve cache ... another job may be
+      # creating this cache") and the cache is already there.
       - name: Save cargo cache
-        if: always()
+        if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
