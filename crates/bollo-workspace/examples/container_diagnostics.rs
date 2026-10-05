@@ -39,7 +39,8 @@ mod diag {
 
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, LocalFree, FILETIME, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+        CloseHandle, GetLastError, LocalFree, FILETIME, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -57,6 +58,7 @@ mod diag {
         CreateFileW, GetFileAttributesW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
         FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
         FILE_SHARE_READ, FILE_SHARE_WRITE, INVALID_FILE_ATTRIBUTES, OPEN_EXISTING,
+        PIPE_ACCESS_DUPLEX,
     };
     use windows_sys::Win32::System::Diagnostics::Debug::{
         FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -66,6 +68,9 @@ mod diag {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
         JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+    };
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY,
@@ -604,11 +609,19 @@ mod diag {
     }
 
     fn open_probe(name: &[u16], access: u32) -> Value {
+        open_probe_with_share(
+            name,
+            access,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        )
+    }
+
+    fn open_probe_with_share(name: &[u16], access: u32, share: u32) -> Value {
         unsafe {
             let handle = CreateFileW(
                 name.as_ptr(),
                 access,
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                share,
                 std::ptr::null(),
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL,
@@ -763,26 +776,45 @@ mod diag {
                 )
             }),
         ];
-        if let Some(handles) = unsafe { nul_handles() } {
-            variants.push(matrix_entry("raw_appname_inherit_stdio_nul", unsafe {
-                create_core(
-                    name.as_ptr(),
-                    &mut wide(&base_line),
-                    1,
-                    std::ptr::null(),
-                    CREATE_NO_WINDOW,
-                    &nul_startup(&handles),
-                )
-            }));
-            variants.push(matrix_entry(
-                "raw_appname_inherit_stdio_nul_handle_list",
-                unsafe { create_with_handle_list(&name, &mut wide(&base_line), &handles) },
-            ));
-            for handle in handles {
-                unsafe {
-                    CloseHandle(handle);
+        match unsafe { nul_handles() } {
+            Ok(handles) => {
+                variants.push(matrix_entry("raw_appname_inherit_stdio_nul", unsafe {
+                    create_core(
+                        name.as_ptr(),
+                        &mut wide(&base_line),
+                        1,
+                        std::ptr::null(),
+                        CREATE_NO_WINDOW,
+                        &nul_startup(&handles),
+                    )
+                }));
+                variants.push(matrix_entry(
+                    "raw_appname_inherit_stdio_nul_handle_list",
+                    unsafe { create_with_handle_list(&name, &mut wide(&base_line), &handles) },
+                ));
+                // The exact std recipe for `Command::output()`: application
+                // name set, handles inherited, a Unicode environment (no
+                // window flag), std's own NUL handles.
+                variants.push(matrix_entry("raw_std_recipe_nul", unsafe {
+                    create_core(
+                        name.as_ptr(),
+                        &mut wide(&base_line),
+                        1,
+                        std::ptr::null(),
+                        CREATE_UNICODE_ENVIRONMENT,
+                        &nul_startup(&handles),
+                    )
+                }));
+                for handle in handles {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
                 }
             }
+            Err(error) => variants.push(matrix_entry(
+                "raw_appname_inherit_stdio_nul",
+                json!({"setup_error": error}),
+            )),
         }
         variants.push(matrix_entry(
             "std_pipes",
@@ -793,11 +825,113 @@ mod diag {
             "std_null_no_window",
             command_variant(path, true, true),
         ));
+        variants.push(matrix_entry(
+            "std_inherit_stdio",
+            std_stdio_variant(path, false),
+        ));
+        variants.push(matrix_entry(
+            "std_null_stdin_only",
+            std_stdio_variant(path, true),
+        ));
+        variants.push(matrix_entry("nul_device", nul_device_report()));
+        variants.push(matrix_entry("named_pipe", named_pipe_report()));
         json!(variants)
     }
 
     fn matrix_entry(variant: &str, result: Value) -> Value {
         json!({"variant": variant, "result": result})
+    }
+
+    /// `status()` defers to `Stdio::Inherit`, which duplicates the parent's own
+    /// stdio instead of opening anything new. If that works where `output()`
+    /// does not, the denial is in std's handle setup (the NUL device or the
+    /// pipe), not in `CreateProcessW`.
+    fn std_stdio_variant(path: &Path, null_stdin_only: bool) -> Value {
+        let mut command = std::process::Command::new(path);
+        command.arg("--version");
+        if null_stdin_only {
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+        } else {
+            command
+                .stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+        }
+        match command.status() {
+            Ok(status) => json!({"exit": status.code()}),
+            Err(err) => json!({"error": err.to_string(), "raw": err.raw_os_error()}),
+        }
+    }
+
+    /// Every way std's `Stdio::Null` can touch a device: the exact path
+    /// (`\\.\NUL`), the access combinations, and the device object's own
+    /// DACL.
+    fn nul_device_report() -> Value {
+        let mut tries = Vec::new();
+        for (path, access_label, access) in [
+            (
+                "NUL",
+                "file_read_write",
+                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+            ),
+            ("NUL", "generic_read", GENERIC_READ),
+            (r"\\.\NUL", "generic_write", GENERIC_WRITE),
+            (
+                r"\\.\NUL",
+                "generic_read_write",
+                GENERIC_READ | GENERIC_WRITE,
+            ),
+        ] {
+            for (share_label, share) in [
+                ("read_write", FILE_SHARE_READ | FILE_SHARE_WRITE),
+                (
+                    "read_write_delete",
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                ),
+            ] {
+                let name = wide(path);
+                tries.push(json!({
+                    "path": path,
+                    "access": access_label,
+                    "share": share_label,
+                    "result": open_probe_with_share(&name, access, share),
+                }));
+            }
+        }
+        json!({
+            "tries": tries,
+            "sddl": sddl(Path::new(r"\\.\NUL"), DACL_SECURITY_INFORMATION),
+        })
+    }
+
+    fn named_pipe_report() -> Value {
+        unsafe {
+            let name = format!(r"\\.\pipe\bollo-diag-{}", std::process::id());
+            let name_wide = wide(&name);
+            let mut attributes = SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: std::ptr::null_mut(),
+                bInheritHandle: 1,
+            };
+            let handle = CreateNamedPipeW(
+                name_wide.as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                4096,
+                4096,
+                0,
+                &mut attributes,
+            );
+            if handle == INVALID_HANDLE_VALUE {
+                return json!({"created": false, "error": code_text(GetLastError())});
+            }
+            CloseHandle(handle);
+            json!({"created": true, "name": name})
+        }
     }
 
     /// The shape the launcher itself uses, plus the environment block: a
@@ -818,33 +952,41 @@ mod diag {
         startup
     }
 
-    unsafe fn nul_handles() -> Option<[HANDLE; 3]> {
+    /// std's own recipe for the three stdio handles: stdin opens the NUL
+    /// device read-only, stdout/stderr write-only, all inheritable.
+    unsafe fn nul_handles() -> Result<[HANDLE; 3], String> {
         let mut attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: std::ptr::null_mut(),
             bInheritHandle: 1,
         };
-        let nul = wide("NUL");
+        let nul = wide(r"\\.\NUL");
+        let accesses = [GENERIC_READ, GENERIC_WRITE, GENERIC_WRITE];
         let mut handles: Vec<HANDLE> = Vec::new();
-        for _ in 0..3 {
+        for (index, access) in accesses.iter().enumerate() {
             let handle = CreateFileW(
                 nul.as_ptr(),
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                *access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 &mut attributes,
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL,
                 std::ptr::null_mut(),
             );
             if handle == INVALID_HANDLE_VALUE {
+                let error = format!(
+                    "open {} handle {index}: {}",
+                    r"\\.\NUL",
+                    code_text(GetLastError())
+                );
                 for existing in handles {
                     CloseHandle(existing);
                 }
-                return None;
+                return Err(error);
             }
             handles.push(handle);
         }
-        Some([handles[0], handles[1], handles[2]])
+        Ok([handles[0], handles[1], handles[2]])
     }
 
     fn nul_startup(handles: &[HANDLE; 3]) -> STARTUPINFOW {
