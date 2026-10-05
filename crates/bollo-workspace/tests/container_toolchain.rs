@@ -38,6 +38,31 @@ fn request(words: &[&str], cwd: &Path) -> ExecRequest {
     }
 }
 
+/// Run a diagnostic inside the container and print it: a failing test prints
+/// these lines, which is how a failure seen only on a runner is diagnosed.
+fn probe(container: &AppContainer, workspace: &Path, label: &str, words: &[&str]) -> ExecOutcome {
+    let outcome = container.run(&request(words, workspace));
+    println!(
+        "{label}: exit={:?}\n  stdout: {}\n  stderr: {}",
+        outcome.exit_code,
+        outcome.stdout.trim_end(),
+        outcome.stderr.trim_end()
+    );
+    outcome
+}
+
+/// Output of a host command (stdout then stderr), for the DACL report below.
+fn host_command(program: &str, args: &[&str]) -> String {
+    match std::process::Command::new(program).args(args).output() {
+        Ok(output) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            text.trim_end().to_string()
+        }
+        Err(err) => format!("{program} failed: {err}"),
+    }
+}
+
 fn host_cargo() -> PathBuf {
     if let Ok(cargo) = std::env::var("CARGO") {
         let candidate = PathBuf::from(cargo);
@@ -69,17 +94,6 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
         !access.read_roots.is_empty(),
         "no host toolchain found; this test needs a Rust toolchain"
     );
-    // Red-run evidence: a failing test prints these lines, so a failure seen
-    // only on a runner can be read from the log. The container-side probe shows
-    // which rustc/cargo the child resolves, next to what it may read.
-    println!("host cargo: {}", host_cargo().display());
-    println!("grant roots: {:#?}", access.read_roots);
-    println!("grant files: {:#?}", access.read_files);
-    let resolved = container.run(&request(&["where", "rustc", "cargo"], &workspace));
-    println!(
-        "container where rustc/cargo: exit={:?}\n{}",
-        resolved.exit_code, resolved.stdout
-    );
     for root in &access.read_roots {
         container
             .grant_toolchain_read(root)
@@ -91,6 +105,50 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
             .unwrap_or_else(|err| panic!("grant {}: {err}", file.display()));
     }
     container.grant_workspace_modify(&workspace).unwrap();
+
+    // Red-run evidence, in three parts: what was granted, what the host's own
+    // DACLs say the toolchain carries, and what the container can actually see
+    // and run. A failure that only happens on a runner is read from these.
+    println!("host cargo: {}", host_cargo().display());
+    println!("grant roots: {:#?}", access.read_roots);
+    println!("grant files: {:#?}", access.read_files);
+    probe(
+        &container,
+        &workspace,
+        "container PATH",
+        &["echo", "%PATH%"],
+    );
+    probe(
+        &container,
+        &workspace,
+        "container where rustc",
+        &["where", "rustc"],
+    );
+    if let Some(bin) = host_cargo().parent().map(PathBuf::from) {
+        let rustc = bin.join("rustc.exe");
+        println!(
+            "host icacls {}:\n{}",
+            bin.display(),
+            host_command("icacls", &[&bin.display().to_string()])
+        );
+        println!(
+            "host icacls {}:\n{}",
+            rustc.display(),
+            host_command("icacls", &[&rustc.display().to_string()])
+        );
+        probe(
+            &container,
+            &workspace,
+            "container icacls rustc",
+            &["icacls", &rustc.display().to_string()],
+        );
+        probe(
+            &container,
+            &workspace,
+            "container rustc --version",
+            &[&rustc.display().to_string(), "--version"],
+        );
+    }
 
     std::fs::create_dir_all(workspace.join("src")).unwrap();
     std::fs::write(
