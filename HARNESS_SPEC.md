@@ -71,8 +71,9 @@ state machine and not a second binary.
 Bollo-Harness/
 ├── HARNESS_SPEC.md                  this contract
 ├── Cargo.toml                       workspace + shared dependency pins
-│                                    (toolchain: rustup default 1.93.1 msvc on
-│                                    this host; version pinned in CI terms)
+├── rust-toolchain.toml              pinned toolchain: 1.93.1 msvc, the
+│                                    same triple CI installs and the
+│                                    containment measurements were taken on
 ├── crates/
 │   ├── bollo-protocol/              IDs, events, commands, errors, NDJSON codec
 │   ├── bollo-policy/                pure evaluator, layers, normalize, approvals

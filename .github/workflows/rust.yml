@@ -15,8 +15,22 @@ jobs:
       RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v4
+      # The toolchain is pinned in rust-toolchain.toml, so this cache is keyed
+      # on that pin and the lockfile: a toolchain or dependency change starts
+      # clean, while repeat runs reuse the registry and the build directory.
+      - name: Cache cargo registry and build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: "${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}"
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Install Rust 1.93.1
         run: |
+          # rust-toolchain.toml pins this same version for every cargo call.
           rustup toolchain install 1.93.1 --profile minimal --no-self-update
           rustup default 1.93.1
           rustc --version

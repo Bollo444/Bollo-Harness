@@ -1,0 +1,8 @@
+# The toolchain every `cargo`/`rustc` in this repository resolves to, locally
+# and in CI: rustup sees this file from any directory inside the repository.
+# The MSVC triple is what the Windows workflow installs and what the containment
+# measurements were taken on (HARNESS_SPEC.md section 3), so a local run and a
+# CI run compile with the same toolchain. The enforcement backend is
+# Windows-only; on another host this line would name that host's toolchain.
+[toolchain]
+channel = "1.93.1-x86_64-pc-windows-msvc"

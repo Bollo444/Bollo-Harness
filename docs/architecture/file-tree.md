@@ -9,6 +9,7 @@ Bollo-Harness/
 ├── README.md
 ├── .gitignore
 ├── requirements-docs.txt
+├── rust-toolchain.toml               tested/pinned Rust toolchain
 ├── .github/workflows/docs.yml
 ├── .github/workflows/rust.yml
 ├── scripts/validate_docs.py

@@ -44,6 +44,9 @@ Upstream code was inspected but was not copied into this repository.
 
 ## Build and verify
 
+The toolchain is pinned in `rust-toolchain.toml` (1.93.1 MSVC), the same
+compiler the Windows workflow installs, so a local run and a CI run agree.
+
 ```sh
 cargo build --workspace            # clean, no warnings
 cargo test  --workspace            # 335 tests: unit, contract, policy fixtures, loop, recovery, MCP gate, API, classifier, Windows containment, escape attempts + toolchain read grants
