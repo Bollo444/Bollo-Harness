@@ -157,29 +157,47 @@ runner. It passes locally single-threaded (18/18) plus 13 crate unit tests.
   `d6485f3` the save step is gated on `cache-hit != 'true'` and is skipped on an exact hit
   (`37268300605`, `37315185806`, `37315792636`).
 
-### Open failure
+### Open failure (explained)
 
-`contained_cargo_builds_with_host_toolchain_grants`
-(`crates/bollo-workspace/tests/container_toolchain.rs`) fails only on the runner. Latest
-observed text (`37315792636`):
+The contained-build test fails only on the runner. Its old probes were misleading on both
+hosts: `where rustc` fails because `PATHEXT` is not part of the environment allowlist, and a
+`cmd`-mediated `rustc --version` prints `Access is denied.` even on the working host, while
+direct execution of the same file succeeds there. A dedicated capture closes the question:
+`crates/bollo-workspace/examples/container_diagnostics.rs` records, on the host and again
+from inside the container, how `rustc`/`cargo` resolve, the container token's capabilities
+and integrity, each candidate's DACL and mandatory label, raw `CreateProcessW` variants
+with one parameter changed at a time, contained `cargo build -v`, the job state, and the
+host's execution gates. CI runs it before the containment test (`continue-on-error`, never
+gating the job) and uploads the JSON as the `container-diagnostics` artifact.
 
-```text
-assertion `left == right` failed: contained cargo build failed:
-stdout:
-stderr: error: could not execute process `rustc -vV` (never executed)
+Observed (`37340973327` at `0491e66`, `37343416842` at `efb672d`, `37345146871` at
+`35ddb9c`, `37345881455` at `31a303c`):
 
-Caused by:
-  Access is denied. (os error 5)
+- Raw `CreateProcessW` inside the container succeeds for every candidate on the runner,
+  including the real `rustc.exe`; handle inheritance, the environment block, the Unicode
+  environment flag, the application-name field and the window flag change nothing.
+- Every `std::process::Command` spawn inside the container fails with
+  `Access is denied. (os error 5)` — `cargo -vV`, the contained `cargo build`, its
+  forced-`RUSTC` variant, and the per-candidate probes alike.
+- A std spawn that inherits the parent's stdio (opening nothing new) succeeds
+  (`std_inherit_stdio` → exit 0); a std spawn where only stdin is `Stdio::null()` fails.
+- Inside the container on the runner every open of the NUL device is denied — the exact
+  path `\\.\NUL`, the plain name, all access and share combinations, and even reading the
+  device's DACL. On this host all of them succeed.
+- The device itself explains the difference. Runner host DACL:
+  `D:(A;;0x1201bf;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;RC)`; this host: the same
+  plus `(A;;0x1201bf;;;AC)(A;;0x1201bf;;;S-1-15-2-2)`. The runner image's NUL device
+  grants nothing to Application Packages or restricted application packages, and the
+  AppContainer token carries neither `Everyone` nor `Restricted Code` for that check.
+- ASR, WDAC, SRP, AppLocker, the job object (only `KILL_ON_JOB_CLOSE` on both hosts), the
+  capability SIDs, the integrity level, and the toolchain DACLs and labels are identical
+  or empty on both hosts, so none of them explains the failure.
 
-  left: Some(101)
- right: Some(0)
-```
-
-The diagnostics that accompany the failure show the capability ACE present on the runner's
-`rustc.exe` and its directory, `icacls` succeeding from inside the container, the container
-resolving `link.exe` to the MSVC toolset, and a `fsutil` hard-link listing with no other
-links — while the container cannot execute `rustc` (`rustc --version` → `Access is denied.`)
-or even resolve it (`where rustc` finds nothing). The integrity-label probe is inconclusive
-on the runner image (its PowerShell security module fails to load), so no label claim is
-made from CI. Executing the granted rustup toolchain from a contained child on that image
-is the open failure; the job cannot be called green until it is closed.
+Cause: Rust's std opens `\\.\NUL` for stdin (and for null stdio) on every spawn. Inside an
+AppContainer on the runner image that open is denied, so `cargo` cannot execute `rustc`
+(`could not execute process 'rustc -vV' (never executed)`), while the harness's own raw
+broker spawns — which never open the device — work, and the escape suite stays 6/6.
+Containment is intact; the contained *build* depends on a host device the image withholds
+from AppContainers. The job stays red until a host-independent answer is chosen (granting
+the device, or a contained spawn path that does not need NUL); the test is not weakened to
+hide the boundary.

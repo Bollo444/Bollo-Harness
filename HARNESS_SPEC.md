@@ -441,7 +441,14 @@ first-class test doubles, not mocks of the code under test.
   binary; before, the same build started the `link.exe` first on the host's
   `PATH` — MSYS's linker, which cannot run in a container — while a contained
   library build was unaffected. A host without discoverable MSVC build tools
-  shares nothing and keeps the earlier behavior.
+  shares nothing and keeps the earlier behavior. One environment boundary was
+  measured on a hosted runner: Rust's std opens the NUL device for stdin on
+  every child spawn, and that image's NUL device DACL grants nothing to
+  Application Packages (this host's grants `AC` and `S-1-15-2-2`), so every
+  contained std-mediated spawn was denied there while raw broker spawns and
+  the escape suite were unaffected. A contained build therefore needs a host
+  whose NUL device admits the container; the validation log records the
+  capture.
 - Live provider HTTP: adapters are implemented against a `Transport` trait with a
   deterministic fake used by all tests; the real HTTPS transport is feature-gated
   and disabled by default in CI terms.

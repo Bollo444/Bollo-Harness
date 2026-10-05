@@ -1,6 +1,6 @@
 # File structure — actual repository and proposed remainder
 
-**Status:** the tracked tree at `4301570` (2026-10-05), read from `git ls-files`: 170
+**Status:** the tracked tree at `31a303c` (2026-10-05), read from `git ls-files`: 171
 files, 58 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
 still only proposed is collected at the end instead of mixed into the tree.
 
@@ -50,6 +50,7 @@ Bollo-Harness/
 │   │   ├── src/sandbox.rs            probes, toolchain access, MSVC build-tool discovery
 │   │   ├── src/sandbox_win.rs        Windows AppContainer backend
 │   │   ├── src/bin/handle_probe.rs   containment test fixture binary
+│   │   ├── examples/container_diagnostics.rs  contained-spawn capture (CI artifact)
 │   │   └── tests/{container_escapes,container_toolchain}.rs
 │   ├── bollo-tools/                  schema-backed built-in tools
 │   │   ├── src/prepare.rs            parse and bound-check before any policy

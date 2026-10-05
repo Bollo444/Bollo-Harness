@@ -147,7 +147,11 @@ only an allowlist of location and tool-identity variables (`PATH`, `LIB`,
 `INCLUDE`, `VCINSTALLDIR`, the version strings — never a credential), and
 contained children receive them so rustc finds the real linker; the MSVC and
 SDK trees are read through the Application Packages ACE a normal installation
-already carries.
+already carries. One host property is needed rather than granted: Rust's std
+opens the NUL device for stdin on every spawn, so contained std-mediated
+spawns (what `cargo` uses to start `rustc`) fail where the device DACL
+excludes app packages — measured on the hosted runner, where the escape
+suite and raw broker spawns still pass.
 
 Backend choice (e.g. Linux namespaces/bubblewrap with appropriate kernel controls) is
 an architecture spike, not already implemented. Sensitive paths must be inaccessible
