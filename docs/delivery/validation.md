@@ -99,5 +99,9 @@ These observations apply to this design baseline; rerun relevant checks after ed
   Application Packages ACE the installation already carries — no new host ACL was
   written, and none could be by this unelevated account.
 - The Windows CI job remains red on the pre-existing runner-only containment execution
-  failure (`rustc -vV` denied inside the container's `cmd`-mediated spawn), which is
-  independent of the shared build-tool environment. CI is not claimed green.
+  failure (`rustc -vV` denied inside the container), which is independent of the shared
+  build-tool environment. In the run for this change (`37315185806`) the runner
+  discovered the VS 18 Enterprise developer prompt, the contained `PATH` resolved
+  `link.exe` to `...\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\link.exe`, and the
+  new discovery unit tests passed; the job then failed at the same pre-existing
+  `rustc -vV` assertion. CI is not claimed green.
