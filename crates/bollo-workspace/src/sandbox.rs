@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use bollo_protocol::vocab::{Platform, SandboxCapabilities};
@@ -159,6 +160,13 @@ pub fn create_workspace_sandbox(workspace: &Path) -> Result<Option<Box<dyn Child
 /// directories — so a contained build never dies with an access error for a
 /// toolchain the host runs fine.
 ///
+/// The MSVC toolset ([`build_tool_environment`]) needs no grant of its own:
+/// a Visual Studio/Windows SDK installation under Program Files already gives
+/// Application Packages read+execute (measured on this host: the ACE is
+/// inherited onto the toolset and SDK trees), and an unelevated user could not
+/// write an ACE there anyway. What the container lacks is the *environment*
+/// that names those directories, which is why the discovery exists.
+///
 /// The cargo home itself is deliberately never a grant root: only its
 /// `bin`, `registry` and `git` subtrees are, so `credentials.toml` sits outside
 /// every grant. `config.toml` is granted as a single file.
@@ -172,6 +180,252 @@ pub fn toolchain_access() -> ToolchainAccess {
     );
     merge_roots(&mut access, effective_toolchain_roots());
     access
+}
+
+/// The MSVC build-tool environment a contained build needs, and the host
+/// directories it references.
+///
+/// A contained `cargo build` of a binary needs a native linker, and on Windows
+/// `rustc` finds MSVC the way a Developer Command Prompt does: from
+/// `VCINSTALLDIR` plus the tool directories that command prompt puts on
+/// `PATH`, and from `LIB`/`INCLUDE` for the libraries and headers the linker
+/// feeds on. None of that works inside the AppContainer on its own — the
+/// registry views the Visual Studio discovery uses are unreadable there, and
+/// the container inherits no host environment — so the host discovers the
+/// environment once and shares it with contained children (`sandbox_win`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BuildToolEnvironment {
+    /// The allowlisted variables a Developer Command Prompt exports, normalized
+    /// to uppercase keys (Windows environment lookup is case-insensitive).
+    pub variables: BTreeMap<String, String>,
+    /// The directories those variables put on the build's search paths, when
+    /// they live inside the Visual C++ / Windows SDK installation trees. They
+    /// are reported rather than granted: the container reads them through the
+    /// Application Packages ACE the installation already carries, and the
+    /// unelevated host user cannot write an ACE there. A host whose SDK lives
+    /// outside such a tree would need the ACL widened by its owner instead.
+    pub roots: Vec<PathBuf>,
+}
+
+/// The keys a Developer Command Prompt exports that a contained MSVC build
+/// needs. Discovery reads the whole host environment, so only this explicit
+/// allowlist crosses into the container: every entry is a location or a
+/// tool-identity string, never a credential.
+#[cfg(windows)]
+const BUILD_TOOL_VARIABLES: &[&str] = &[
+    "PATH",
+    "LIB",
+    "LIBPATH",
+    "INCLUDE",
+    "VCINSTALLDIR",
+    "VCToolsInstallDir",
+    "VCToolsRedistDir",
+    "VCToolsVersion",
+    "VSINSTALLDIR",
+    "VisualStudioVersion",
+    "WindowsSdkDir",
+    "WindowsSdkBinPath",
+    "WindowsSdkVerBinPath",
+    "WindowsSDKLibVersion",
+    "WindowsSDKVersion",
+    "UniversalCRTSdkDir",
+    "UCRTVersion",
+    "NETFXSDKDir",
+    "VSCMD_ARG_HOST_ARCH",
+    "VSCMD_ARG_TGT_ARCH",
+    "VSCMD_ARG_VCVARS_SPECTRE",
+    "VSCMD_VER",
+];
+
+/// The host's build-tool environment, discovered once per process (the
+/// discovery spawns the Visual Studio command script, which is too expensive to
+/// repeat per child). Empty when the host has no discoverable MSVC build tools:
+/// contained linking then behaves as before rather than refusing to run.
+pub fn build_tool_environment() -> BuildToolEnvironment {
+    static DISCOVERED: OnceLock<BuildToolEnvironment> = OnceLock::new();
+    DISCOVERED
+        .get_or_init(discover_build_tool_environment)
+        .clone()
+}
+
+fn discover_build_tool_environment() -> BuildToolEnvironment {
+    #[cfg(windows)]
+    {
+        // A host already inside a Developer Command Prompt answers directly:
+        // the variables are in this process and no script needs to run.
+        let mut variables = build_tool_variables(std::env::vars());
+        if !variables.contains_key("VCINSTALLDIR") {
+            variables = developer_prompt_script()
+                .and_then(|script| capture_developer_prompt(&script))
+                .unwrap_or_default();
+        }
+        let roots = build_tool_roots(&variables);
+        BuildToolEnvironment { variables, roots }
+    }
+    #[cfg(not(windows))]
+    {
+        BuildToolEnvironment::default()
+    }
+}
+
+/// Keep the allowlisted keys, normalized to uppercase, dropping anything else
+/// the host environment carries (including credentials).
+#[cfg(windows)]
+fn build_tool_variables(
+    entries: impl Iterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    let mut variables = BTreeMap::new();
+    for (key, value) in entries {
+        if value.is_empty() {
+            continue;
+        }
+        if BUILD_TOOL_VARIABLES
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(&key))
+        {
+            variables.insert(key.to_ascii_uppercase(), value);
+        }
+    }
+    variables
+}
+
+/// Parse a `set` dump: `KEY=VALUE` per line, first `=` splits, allowlist
+/// applies exactly as for the host environment.
+#[cfg(windows)]
+fn parse_build_tool_environment(text: &str) -> BTreeMap<String, String> {
+    build_tool_variables(text.lines().filter_map(|line| line.split_once('=')).map(
+        |(key, value)| {
+            (
+                key.trim().to_string(),
+                value.trim_end_matches('\r').to_string(),
+            )
+        },
+    ))
+}
+
+/// Directories the discovered variables put on the build's search paths and
+/// that live inside the Visual C++ / Windows SDK installation trees: the
+/// linker and its DLLs, the import libraries, the SDK libraries and binaries.
+/// Entries belonging to other Visual Studio components (MSBuild, Team Tools,
+/// the IDE) are dropped, so the list describes the linker's own dependency
+/// closure rather than the installation. It is evidence for diagnostics and
+/// tests, not a grant list: the container already reads these trees.
+#[cfg(windows)]
+fn build_tool_roots(variables: &BTreeMap<String, String>) -> Vec<PathBuf> {
+    let mut anchors: Vec<PathBuf> = Vec::new();
+    for key in [
+        "VCTOOLSINSTALLDIR",
+        "VCINSTALLDIR",
+        "WINDOWSSDKDIR",
+        "UNIVERSALCRTSDKDIR",
+        "NETFXSDKDIR",
+    ] {
+        if let Some(value) = variables.get(key) {
+            let anchor = PathBuf::from(value);
+            if anchor.is_dir() && !anchors.contains(&anchor) {
+                anchors.push(anchor);
+            }
+        }
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for key in ["PATH", "LIB", "LIBPATH", "INCLUDE"] {
+        let Some(value) = variables.get(key) else {
+            continue;
+        };
+        for entry in std::env::split_paths(value) {
+            if entry.is_dir()
+                && anchors.iter().any(|anchor| under(&entry, anchor))
+                && !roots.contains(&entry)
+            {
+                roots.push(entry);
+            }
+        }
+    }
+    roots
+}
+
+/// Prefix-boundary containment on normalized paths: `C:\Kits\10` contains
+/// `C:\Kits\10\lib` but not `C:\Kits\100`.
+#[cfg(windows)]
+fn under(path: &Path, anchor: &Path) -> bool {
+    let anchor = normalized(anchor);
+    if anchor.is_empty() {
+        return false;
+    }
+    let path = normalized(path);
+    path == anchor || path.starts_with(&format!("{anchor}\\"))
+}
+
+/// `vcvars64.bat` of the newest installation that carries the x64 build tools.
+/// `vswhere.exe` ships with the Visual Studio installer and answers on the
+/// host; a session that already knows its installation (`VSINSTALLDIR`) is
+/// answered without spawning anything.
+#[cfg(windows)]
+fn developer_prompt_script() -> Option<PathBuf> {
+    let script = |install: &Path| {
+        install
+            .join("VC")
+            .join("Auxiliary")
+            .join("Build")
+            .join("vcvars64.bat")
+    };
+    if let Some(install) = env_path("VSINSTALLDIR") {
+        let script = script(&install);
+        if script.is_file() {
+            return Some(script);
+        }
+    }
+    let program_files = env_path("ProgramFiles(x86)").or_else(|| env_path("ProgramFiles"))?;
+    let vswhere = program_files
+        .join("Microsoft Visual Studio")
+        .join("Installer")
+        .join("vswhere.exe");
+    if !vswhere.is_file() {
+        return None;
+    }
+    let output = std::process::Command::new(&vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let install = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if install.is_empty() {
+        return None;
+    }
+    let script = script(Path::new(&install));
+    script.is_file().then_some(script)
+}
+
+/// Export a Developer Command Prompt environment by running its own
+/// `vcvars64.bat` on the host. The script exits non-zero when optional
+/// components are missing while still exporting a usable environment, so the
+/// variables decide; its banner and warnings are not parsed.
+#[cfg(windows)]
+fn capture_developer_prompt(script: &Path) -> Option<BTreeMap<String, String>> {
+    use std::os::windows::process::CommandExt;
+    let command = env_path("COMSPEC")
+        .or_else(|| env_path("SystemRoot").map(|root| root.join("System32").join("cmd.exe")))?;
+    let mut process = std::process::Command::new(&command);
+    process.arg("/D").arg("/C");
+    // Verbatim, so cmd sees exactly one quoted `call ... && set` line.
+    process.raw_arg(format!("call \"{}\" >NUL && set", script.display()));
+    let output = process.output().ok()?;
+    let variables = parse_build_tool_environment(&String::from_utf8_lossy(&output.stdout));
+    (!variables.is_empty()).then_some(variables)
 }
 
 /// Add discovered roots to `access`, keeping existing directories only and
@@ -513,6 +767,127 @@ mod tests {
         assert!(absent.read_roots.is_empty());
         assert!(absent.read_files.is_empty());
         assert!(absent.excluded_files.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Discovery reads the whole host environment, so only explicitly
+    /// allowlisted keys may cross; a credential-looking variable must not.
+    #[test]
+    #[cfg(windows)]
+    fn build_tool_parsing_keeps_locations_only() {
+        let parsed = parse_build_tool_environment(concat!(
+            "VCINSTALLDIR=C:\\BuildTools\\VC\\\r\n",
+            "Path=C:\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\HostX64\\x64;",
+            "C:\\Windows\\System32\r\n",
+            "VSCMD_ARG_TGT_ARCH=x64\r\n",
+            "ANTHROPIC_API_KEY=sk-do-not-copy\r\n",
+            "CARGO_REGISTRY_TOKEN=do-not-copy\r\n",
+            "no-equals-sign\r\n",
+        ));
+        assert!(parsed.contains_key("VCINSTALLDIR"));
+        assert!(parsed.contains_key("PATH"));
+        assert_eq!(parsed.get("VSCMD_ARG_TGT_ARCH"), Some(&"x64".to_string()));
+        assert!(
+            !parsed.keys().any(|key| key.contains("ANTHROPIC")),
+            "a credential-bearing variable crossed the allowlist: {parsed:?}"
+        );
+        assert!(!parsed
+            .values()
+            .any(|value| value.contains("sk-do-not-copy")));
+        assert!(!parsed.values().any(|value| value.contains("do-not-copy")));
+        // Host-environment harvest applies the same allowlist.
+        let harvested = build_tool_variables(
+            [
+                ("VCINSTALLDIR".to_string(), "C:\\vc\\".to_string()),
+                ("path".to_string(), "C:\\bin".to_string()),
+                ("OPENAI_API_KEY".to_string(), "sk-secret".to_string()),
+                ("EMPTY".to_string(), String::new()),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(harvested.get("PATH"), Some(&"C:\\bin".to_string()));
+        assert_eq!(harvested.len(), 2, "{harvested:?}");
+    }
+
+    /// The granted directories are exactly the build search paths inside the
+    /// Visual C++/Windows SDK installations: the linker's dependency closure,
+    /// not the installation.
+    #[test]
+    #[cfg(windows)]
+    fn build_tool_roots_keep_the_linker_closure_only() {
+        let base = std::env::temp_dir().join(format!("bollo-build-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let tools = base
+            .join("BuildTools")
+            .join("VC")
+            .join("Tools")
+            .join("MSVC");
+        let kits = base.join("Kits").join("10");
+        let dirs = [
+            tools
+                .join("14.51.36231")
+                .join("bin")
+                .join("HostX64")
+                .join("x64"),
+            tools.join("14.51.36231").join("lib").join("x64"),
+            tools.join("14.51.36231").join("include"),
+            kits.join("bin").join("10.0.26100.0").join("x64"),
+            kits.join("lib").join("10.0.26100.0").join("um").join("x64"),
+        ];
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Another Visual Studio component: on PATH, inside the installation,
+        // but not part of a link.
+        let msbuild = base
+            .join("BuildTools")
+            .join("MSBuild")
+            .join("Current")
+            .join("Bin");
+        std::fs::create_dir_all(&msbuild).unwrap();
+        // A sibling outside the Windows Kits root that shares its name prefix.
+        let kits_sibling = base.join("Kits").join("100");
+        std::fs::create_dir_all(&kits_sibling).unwrap();
+
+        let mut variables = BTreeMap::new();
+        variables.insert(
+            "VCTOOLSINSTALLDIR".to_string(),
+            format!("{}\\", tools.join("14.51.36231").display()),
+        );
+        variables.insert("WINDOWSSDKDIR".to_string(), format!("{}\\", kits.display()));
+        let path = std::env::join_paths([
+            dirs[0].clone(),
+            msbuild.clone(),
+            kits_sibling.clone(),
+            dirs[3].clone(),
+        ])
+        .unwrap();
+        variables.insert("PATH".to_string(), path.to_string_lossy().into_owned());
+        let lib = std::env::join_paths([dirs[1].clone(), dirs[4].clone()]).unwrap();
+        variables.insert("LIB".to_string(), lib.to_string_lossy().into_owned());
+        variables.insert(
+            "INCLUDE".to_string(),
+            dirs[2].to_string_lossy().into_owned(),
+        );
+
+        let roots = build_tool_roots(&variables);
+        for want in &dirs {
+            assert!(
+                roots.contains(want),
+                "{} missing from {roots:#?}",
+                want.display()
+            );
+        }
+        assert!(
+            !roots.contains(&msbuild),
+            "an unrelated Visual Studio component was granted: {roots:#?}"
+        );
+        assert!(
+            !roots.contains(&kits_sibling),
+            "a sibling of the kits root was granted: {roots:#?}"
+        );
+        // No discovery is not a grant: empty variables yield no roots.
+        assert!(build_tool_roots(&BTreeMap::new()).is_empty());
         let _ = std::fs::remove_dir_all(&base);
     }
 

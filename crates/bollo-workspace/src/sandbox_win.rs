@@ -812,16 +812,22 @@ fn close_all(handles: &[HANDLE]) {
     }
 }
 
-/// Build the UTF-16 environment block: base allowlist plus explicit request
-/// overrides, never credential-bearing variables.
+/// Build the UTF-16 environment block: base allowlist, the host's discovered
+/// build-tool environment, then explicit request overrides — never
+/// credential-bearing variables.
+///
+/// The build-tool variables are what a Developer Command Prompt exports; a
+/// contained child cannot discover MSVC on its own (the Visual Studio registry
+/// views are unreadable inside the AppContainer), so without them rustc cannot
+/// find a real linker and picks whatever `link.exe` is first on `PATH`.
 fn environment_block(request: &ExecRequest) -> Vec<u16> {
     let mut env = base_environment();
-    env.extend(
-        request
-            .env
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
+    for (key, value) in &crate::sandbox::build_tool_environment().variables {
+        overwrite(&mut env, key, value);
+    }
+    for (key, value) in &request.env {
+        overwrite(&mut env, key, value);
+    }
     let mut block: Vec<u16> = Vec::new();
     for (key, value) in env {
         block.extend(OsStr::new(&format!("{key}={value}")).encode_wide());
@@ -829,6 +835,16 @@ fn environment_block(request: &ExecRequest) -> Vec<u16> {
     }
     block.push(0);
     block
+}
+
+/// Set `key` to `value`, removing an existing entry that differs only in case:
+/// the OS compares environment keys case-insensitively, so keeping both would
+/// leave the effective value unspecified.
+fn overwrite(env: &mut BTreeMap<String, String>, key: &str, value: &str) {
+    if let Some(existing) = env.keys().find(|k| k.eq_ignore_ascii_case(key)).cloned() {
+        env.remove(&existing);
+    }
+    env.insert(key.to_string(), value.to_string());
 }
 
 fn command_line(argv: &[String]) -> Vec<u16> {

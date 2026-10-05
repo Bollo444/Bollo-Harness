@@ -140,7 +140,14 @@ receive access through allow ACEs only (a deny ACE does not override an
 inherited allow), and objects with protected DACLs accept no inherited ACEs.
 `config.toml` is readable to contained children, so a registry token stored
 there (deprecated cargo practice) should move to `credentials.toml`, which is
-never granted.
+never granted. Contained *linking* needs the MSVC toolchain, which is not a
+capability grant at all: the host discovers the Developer Command Prompt
+environment once (its own variables, or `vswhere` plus `vcvars64.bat`), keeps
+only an allowlist of location and tool-identity variables (`PATH`, `LIB`,
+`INCLUDE`, `VCINSTALLDIR`, the version strings — never a credential), and
+contained children receive them so rustc finds the real linker; the MSVC and
+SDK trees are read through the Application Packages ACE a normal installation
+already carries.
 
 Backend choice (e.g. Linux namespaces/bubblewrap with appropriate kernel controls) is
 an architecture spike, not already implemented. Sensitive paths must be inaccessible

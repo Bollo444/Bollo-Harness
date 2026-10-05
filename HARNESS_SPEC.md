@@ -420,15 +420,28 @@ first-class test doubles, not mocks of the code under test.
   /inheritance:d`, or a file copied with its descriptor) accept no inherited
   ACEs and stay ungranted until inheritance is restored — the root grant
   cannot reach them. Grants persist for the life of the capability; there is
-  no revoke command yet. Finally, contained *linking* is measured but not
-  solved: a binary/test build needs the MSVC toolchain, which the host rustc
-  discovers through state the container cannot see (inside the AppContainer
-  the VS registry views are unreadable; the MSVC linker itself does run from
-  Program Files). On this host the contained build then started the
-  `link.exe` found on PATH — MSYS's linker, which cannot run in a container
-  — while a contained library build is unaffected. Giving contained children
-  a Developer Command Prompt environment (or discovering the toolchain beside
-  the linker) is the follow-up that makes contained `cargo test` link.
+  no revoke command yet. Finally, contained *linking* works by sharing the host's build-tool
+  environment. A binary/test build needs the MSVC toolchain, which rustc
+  discovers the way a Developer Command Prompt does: `VCINSTALLDIR` plus the
+  tool directories on `PATH`, and `LIB`/`INCLUDE` for the libraries and
+  headers the linker reads. A contained child cannot see any of that on its
+  own — the VS registry views are unreadable inside the AppContainer, and no
+  host environment is inherited. The host therefore discovers the environment
+  once (its own variables when it already runs inside a developer prompt,
+  otherwise `vswhere` finds the installation and its `vcvars64.bat` is
+  captured), keeps only the allowlisted location and tool-identity variables
+  (`PATH`, `LIB`, `INCLUDE`, `VCINSTALLDIR`, the version strings — never a
+  credential), and hands that to contained children next to the base
+  allowlist. The MSVC/SDK trees themselves need no grant: a normal
+  installation already grants Application Packages read+execute on them
+  (measured: the ACE is inherited onto the toolset and SDK directories), and
+  the unelevated host user could not write an ACE there anyway. Measured on
+  this host after the change: a contained `cargo build --offline` of a crate
+  with a library and a binary links `toy.exe`, and the container runs the
+  binary; before, the same build started the `link.exe` first on the host's
+  `PATH` — MSYS's linker, which cannot run in a container — while a contained
+  library build was unaffected. A host without discoverable MSVC build tools
+  shares nothing and keeps the earlier behavior.
 - Live provider HTTP: adapters are implemented against a `Transport` trait with a
   deterministic fake used by all tests; the real HTTPS transport is feature-gated
   and disabled by default in CI terms.

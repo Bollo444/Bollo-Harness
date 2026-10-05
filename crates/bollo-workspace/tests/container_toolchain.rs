@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bollo_workspace::process::{ChildSandbox, ExecOutcome, ExecRequest};
-use bollo_workspace::sandbox::toolchain_access;
+use bollo_workspace::sandbox::{build_tool_environment, toolchain_access};
 use bollo_workspace::sandbox_win::AppContainer;
 
 fn cmd() -> PathBuf {
@@ -78,9 +78,14 @@ fn host_cargo() -> PathBuf {
 }
 
 /// A contained `cargo build --offline` of a dependency-free crate must succeed
-/// on the host toolchain and package caches, and the artifact must land in the
-/// workspace. The crate is written *after* the grants, so its files inherit;
-/// the toolchain files existed before and are covered by the walk.
+/// on the host toolchain and package caches, and the artifacts must land in
+/// the workspace — including a *linked binary*: a library build needs no
+/// native linker, so the binary is what proves the containment boundary can
+/// still link (the environment the host's Developer Command Prompt names is
+/// shared with the child, and the MSVC/SDK trees it references are read
+/// through the Application Packages ACE the installation carries).
+/// The crate is written *after* the grants, so its files inherit; the
+/// toolchain files existed before and are covered by the walk.
 #[test]
 fn contained_cargo_builds_with_host_toolchain_grants() {
     let base = std::env::temp_dir().join(format!("bollo-cargo-test-{}", std::process::id()));
@@ -109,9 +114,20 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
     // Red-run evidence, in three parts: what was granted, what the host's own
     // DACLs say the toolchain carries, and what the container can actually see
     // and run. A failure that only happens on a runner is read from these.
+    let build_tools = build_tool_environment();
+    assert!(
+        !build_tools.variables.is_empty() && !build_tools.roots.is_empty(),
+        "no MSVC Developer Command Prompt discovered on this host; install the Visual \
+         Studio build tools (the msvc-pinned workspace cannot link without them)"
+    );
     println!("host cargo: {}", host_cargo().display());
     println!("grant roots: {:#?}", access.read_roots);
     println!("grant files: {:#?}", access.read_files);
+    println!(
+        "build-tool variables: {:#?}",
+        build_tools.variables.keys().collect::<Vec<_>>()
+    );
+    println!("build-tool roots: {:#?}", build_tools.roots);
     probe(
         &container,
         &workspace,
@@ -123,6 +139,12 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
         &workspace,
         "container where rustc",
         &["where", "rustc"],
+    );
+    let linker = probe(
+        &container,
+        &workspace,
+        "container where link.exe",
+        &["where", "link.exe"],
     );
     if let Some(bin) = host_cargo().parent().map(PathBuf::from) {
         let rustc = bin.join("rustc.exe");
@@ -181,6 +203,23 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
         );
     }
 
+    // The contained `PATH` must resolve `link.exe` to the MSVC toolset the
+    // host discovered, not to a linker that only exists on the host's own
+    // `PATH` (the measured failure: MSYS's `link.exe` was picked and could not
+    // run in the container).
+    let toolset = build_tools
+        .variables
+        .get("VCTOOLSINSTALLDIR")
+        .expect("the discovered developer prompt names its toolset")
+        .to_lowercase();
+    assert!(
+        linker.stdout.to_lowercase().contains(&toolset),
+        "the contained PATH did not resolve link.exe to the discovered MSVC toolset \
+         ({toolset}):\n{}\n{}",
+        linker.stdout,
+        linker.stderr
+    );
+
     std::fs::create_dir_all(workspace.join("src")).unwrap();
     std::fs::write(
         workspace.join("Cargo.toml"),
@@ -189,7 +228,19 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
     .unwrap();
     std::fs::write(
         workspace.join("src").join("lib.rs"),
-        "pub fn answer() -> u32 { 42 }\n",
+        "pub fn answer() -> u32 { 42 }\n\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             #[test]\n\
+             fn answers() {\n\
+                 assert_eq!(super::answer(), 42);\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join("src").join("main.rs"),
+        "fn main() { println!(\"contained-link-ok\"); }\n",
     )
     .unwrap();
 
@@ -211,13 +262,59 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
         run.stdout,
         run.stderr
     );
+    let library = workspace.join("target").join("debug").join("libtoy.rlib");
     assert!(
-        workspace
-            .join("target")
-            .join("debug")
-            .join("libtoy.rlib")
-            .is_file(),
-        "cargo reported success but the artifact is missing"
+        library.is_file(),
+        "cargo reported success but the library artifact is missing"
+    );
+    // The binary is the link proof: creating it required the MSVC linker, and
+    // running it inside the container proves the produced image loads and is
+    // genuinely executable under containment.
+    let binary = workspace.join("target").join("debug").join("toy.exe");
+    assert!(
+        binary.is_file(),
+        "cargo reported success but the linked binary is missing"
+    );
+    let ran = container.run(&request(&["target\\debug\\toy.exe"], &workspace));
+    assert_eq!(
+        ran.exit_code,
+        Some(0),
+        "the contained binary did not run:\nstdout: {}\nstderr: {}",
+        ran.stdout,
+        ran.stderr
+    );
+    assert!(
+        ran.stdout.contains("contained-link-ok"),
+        "the linked binary ran but produced unexpected output: {}",
+        ran.stdout
+    );
+
+    // The boundary named this follow-up: a contained `cargo test` must link
+    // (the test harness is a linked binary too) and run. Same toolchain path as
+    // the binary above, exercised through the command a workspace-mode run
+    // actually uses.
+    let tested = container.run(&ExecRequest {
+        argv: vec![
+            host_cargo().display().to_string(),
+            "test".into(),
+            "--offline".into(),
+        ],
+        cwd: workspace.clone(),
+        timeout: Duration::from_secs(180),
+        env: BTreeMap::new(),
+        max_output_bytes: 65536,
+    });
+    assert_eq!(
+        tested.exit_code,
+        Some(0),
+        "contained cargo test failed:\nstdout: {}\nstderr: {}",
+        tested.stdout,
+        tested.stderr
+    );
+    assert!(
+        tested.stdout.contains("test result: ok"),
+        "the contained test run did not report a passing test:\n{}",
+        tested.stdout
     );
 
     // The toolchain grant is amortized: a second run finds the marker ACE on

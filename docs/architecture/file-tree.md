@@ -75,7 +75,7 @@ Bollo-Harness/
 │   │   ├── fs.rs                     handle-relative path operations
 │   │   ├── checkpoints.rs            preimage/postimage restore guards
 │   │   ├── process.rs                child group lifecycle
-│   │   ├── sandbox.rs                capability probes; linux, macos, windows, host
+│   │   ├── sandbox.rs                capability probes; toolchain grants; MSVC build-tool discovery
 │   │   └── sandbox_win.rs            Windows AppContainer backend (brokered exec/git/hooks run inside the container once workspace mode verifies)
 │   ├── bollo-providers/src/
 │   │   ├── anthropic.rs              Messages adapter

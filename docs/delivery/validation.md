@@ -10,8 +10,9 @@ python3 -m venv .venv
 .venv/bin/python scripts/validate_docs.py
 ```
 
-The GitHub Actions documentation workflow runs the same validation on pushes/pull requests. Workflow
-configuration is present; a remote CI run is not claimed until actually observed.
+The GitHub Actions documentation workflow runs the same validation on pushes/pull requests. The
+workflow has run remotely (green); the Windows Rust workflow is observed red on a pre-existing
+containment check and is not claimed green.
 
 Checks performed:
 
@@ -81,3 +82,22 @@ backlog and record concrete evidence at the corresponding phase gate.
   covered the new documentation files before they were added to Git's index.
 
 These observations apply to this design baseline; rerun relevant checks after edits.
+
+## Observed checks on 2026-10-05 (Windows containment, local host)
+
+- `cargo build --workspace --locked` and
+  `cargo test --workspace --exclude bollo-api --locked --no-fail-fast` passed on a
+  standard, non-elevated Windows 11 host with the pinned `1.93.1-x86_64-pc-windows-msvc`
+  toolchain: 6/6 containment escape tests, 35/35 `bollo-workspace` unit tests, and 2/2
+  toolchain-grant tests.
+- Contained linking was measured, not assumed. With the host's MSVC Developer Command
+  Prompt environment discovered (`vswhere` plus `vcvars64.bat`, allowlisted to location
+  and tool-identity variables) and shared with contained children, a contained
+  `cargo build --offline` produced both the library and a linked `toy.exe`; the
+  container ran that binary, and a contained `cargo test --offline` reported
+  `test result: ok`. The MSVC and Windows SDK directories were read through the
+  Application Packages ACE the installation already carries — no new host ACL was
+  written, and none could be by this unelevated account.
+- The Windows CI job remains red on the pre-existing runner-only containment execution
+  failure (`rustc -vV` denied inside the container's `cmd`-mediated spawn), which is
+  independent of the shared build-tool environment. CI is not claimed green.

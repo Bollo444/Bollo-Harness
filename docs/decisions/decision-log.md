@@ -160,12 +160,17 @@ command yet; objects whose DACL is protected (`icacls /inheritance:d`) accept
 no inherited ACEs and stay ungranted; a `CARGO_HOME` inside the workspace
 refuses the run; `config.toml` is readable to contained children, so a token
 stored there (deprecated cargo practice) should move to `credentials.toml`,
-which is never granted; contained *linking* still depends on the MSVC
-toolchain being discoverable — measured: a contained binary build started the
-`link.exe` found on PATH (MSYS's linker on this host, which crashes in a
-container) because the host rustc's registry-based discovery is not available
-inside the AppContainer, while the real MSVC linker runs fine there. That
-build-tool environment is the next piece. **Evidence:**
+which is never granted; contained *linking* depends on the host's
+build-tool environment being shareable: the host discovers it once (its own
+variables inside a developer prompt, otherwise `vswhere` plus `vcvars64.bat`),
+keeps only allowlisted location/tool-identity variables, and contained
+children receive them, because rustc's MSVC discovery reads `VCINSTALLDIR`
+and `PATH` inside the AppContainer too — measured: a contained binary build
+linked and ran once the environment was shared, while before it started the
+`link.exe` found on PATH (MSYS's linker on this host, which cannot run in a
+container). The toolset and SDK trees themselves are read through the
+Application Packages ACE a normal installation already carries, so no
+Program Files ACL is touched (and could not be, by an unelevated user). **Evidence:**
 `crates/bollo-workspace/tests/container_toolchain.rs` (contained `cargo build
 --offline`, credential stores unreadable, grant reuse) and the toolchain-access
 unit tests. **Gate:** the credential-canary test must stay green; revisit when
