@@ -58,7 +58,7 @@ owns semantic consistency.
 - [Context assembly, model adapters and budgets](architecture/context-and-providers.md)
 - [Data model, persistence and retention](architecture/data-model.md)
 - [Mermaid visual architecture](architecture/diagrams.md)
-- [File structure — actual documentation and proposed implementation](architecture/file-tree.md)
+- [File structure — actual repository and proposed remainder](architecture/file-tree.md)
 - [Runtime, state machine, cancellation and recovery](architecture/runtime.md)
 - [System design and component contracts](architecture/system-design.md)
 

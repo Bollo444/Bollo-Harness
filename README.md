@@ -15,7 +15,7 @@ remove model-provider restrictions.
 - **[Project blueprint](docs/BLUEPRINT.md)** — the product, architecture, and visual overview.
 - [Which Grok CLI?](docs/research/comparison.md) — official Rust vs community TypeScript.
 - [PRD](docs/product/prd.md) · [MVP](docs/product/mvp.md) · [Master Project Plan](docs/delivery/master-project-plan.md).
-- [Wireframes](docs/ux/wireframes.md) · [Mermaid diagrams](docs/architecture/diagrams.md) · [Proposed file tree](docs/architecture/file-tree.md).
+- [Wireframes](docs/ux/wireframes.md) · [Mermaid diagrams](docs/architecture/diagrams.md) · [File tree](docs/architecture/file-tree.md).
 - [Permission design](docs/security/permissions.md) · [API/endpoints](docs/reference/api.md) · [MCP](docs/reference/mcp.md).
 - [Evidence and limitations](docs/research/sources.md) · [Open decisions](docs/decisions/decision-log.md).
 

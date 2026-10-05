@@ -105,3 +105,81 @@ These observations apply to this design baseline; rerun relevant checks after ed
   `link.exe` to `...\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\link.exe`, and the
   new discovery unit tests passed; the job then failed at the same pre-existing
   `rustc -vV` assertion. CI is not claimed green.
+## Observed CI runs on 2026-10-05 (GitHub Actions)
+
+Conclusions, run IDs and step timings below are copied from the runs (`gh run view`), not
+inferred. A red run is reported as red.
+
+### Documentation contracts — green
+
+The workflow succeeded on every push since it landed, 11–22 s per run, including
+`37315793036` for `4301570` and `37315185868` for `e34ec64`.
+
+### Rust workspace (Windows) — red on every run
+
+One job per push; every run has failed. Step timings are seconds from the run's own step
+records:
+
+| Run | Commit | Job | Build | Test | Cargo cache |
+|---|---|---|---|---|---|
+| 37263793995 | `6babee8` | 131 | 50 | 55 | no cache step yet |
+| 37264623013 | `b020871` | 133 | 56 | 51 | — |
+| 37265328801 | `c0825cc` | 126 | 52 | 50 | — |
+| 37266086894 | `939267c` | 135 | 57 | 53 | baseline before the pin/cache work |
+| 37267254683 | `8c5e94d` | 124 | 49 | 53 | combined `actions/cache@v5`: miss |
+| 37267541725 | `84f42ee` | 125 | 49 | 53 | miss; `save-always` warned as deprecated |
+| 37267857740 | `0c20814` | 92 | 4 | 42 | restore/save split; attempt 1 saved the cache |
+| 37268300605 | `d6485f3` | 86 | 5 | 43 | restore hit 15 s; save skipped |
+| 37315185806 | `e34ec64` | 92 | 5 | 47 | restore 14 s; save skipped |
+| 37315792636 | `4301570` | 120 | 9 | 61 | restore hit; save skipped |
+
+The escape suite runs on the runner and passes: `container_escapes` reports 6/6 in 15.5 s
+(`37263793995`), 15.1 s (`37268300605`), 16.5 s (`37315185806`) and 16.0 s
+(`37315792636`).
+
+The `Test bollo-api (single-threaded)` step is **skipped in every run** because the
+workspace test step fails first; the loopback suite has therefore never executed on a
+runner. It passes locally single-threaded (18/18) plus 13 crate unit tests.
+
+### Cargo cache measurements
+
+- Key `Windows-cargo-3cadab0bd8bed2fd617cb374ef1f120d83fcbb6a658c57380e15b74a42d063bf`
+  (`hashFiles('rust-toolchain.toml', 'Cargo.lock')`, restore key `Windows-cargo-`), entry
+  412,099,635 B (≈393 MB), created 05:29:26Z during `37267857740` (`0c20814`).
+- Measured effect: the `Build workspace` step takes 49–57 s cold and 4–5 s warm; the job
+  went from 124–135 s to 86–92 s, with the restore itself costing 14–15 s.
+- The combined `actions/cache@v5` saved nothing while the job was red (its post step was
+  skipped in `37267254683` and `37267541725`), so a failing run could never warm the
+  cache. `save-always: true` is deprecated and ignored in v5 (warning logged in
+  `37267541725`).
+- A duplicate save is refused with `Failed to save: Unable to reserve cache with key …,
+  another job may be creating this cache.` (attempt 2 of `37267857740`, 9 s). Since
+  `d6485f3` the save step is gated on `cache-hit != 'true'` and is skipped on an exact hit
+  (`37268300605`, `37315185806`, `37315792636`).
+
+### Open failure
+
+`contained_cargo_builds_with_host_toolchain_grants`
+(`crates/bollo-workspace/tests/container_toolchain.rs`) fails only on the runner. Latest
+observed text (`37315792636`):
+
+```text
+assertion `left == right` failed: contained cargo build failed:
+stdout:
+stderr: error: could not execute process `rustc -vV` (never executed)
+
+Caused by:
+  Access is denied. (os error 5)
+
+  left: Some(101)
+ right: Some(0)
+```
+
+The diagnostics that accompany the failure show the capability ACE present on the runner's
+`rustc.exe` and its directory, `icacls` succeeding from inside the container, the container
+resolving `link.exe` to the MSVC toolset, and a `fsutil` hard-link listing with no other
+links — while the container cannot execute `rustc` (`rustc --version` → `Access is denied.`)
+or even resolve it (`where rustc` finds nothing). The integrity-label probe is inconclusive
+on the runner image (its PowerShell security module fails to load), so no label claim is
+made from CI. Executing the granted rustup toolchain from a contained child on that image
+is the open failure; the job cannot be called green until it is closed.
