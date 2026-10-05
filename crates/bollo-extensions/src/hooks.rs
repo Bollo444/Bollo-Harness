@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use bollo_protocol::cancel::CancellationToken;
-use bollo_workspace::process::{run_with_stdin, ExecRequest, ExecStatus};
+use bollo_workspace::process::{run_with_stdin, ChildSandbox, ExecRequest, ExecStatus};
 
 use crate::trust::TrustStore;
 
@@ -68,6 +68,7 @@ pub fn run_before_hook(
     cwd: &Path,
     trust: &TrustStore,
     cancel: &CancellationToken,
+    sandbox: Option<&dyn ChildSandbox>,
 ) -> HookOutcome {
     if spec.event != HookEvent::BeforeTool {
         return HookOutcome::Denied {
@@ -90,7 +91,7 @@ pub fn run_before_hook(
             ),
         };
     }
-    match execute(spec, payload, cwd) {
+    match execute(spec, payload, cwd, sandbox) {
         Ok(stdout) => match serde_json::from_str::<serde_json::Value>(&stdout) {
             Ok(value) => match value["decision"].as_str() {
                 Some("continue") => HookOutcome::Continue,
@@ -119,6 +120,7 @@ pub fn run_after_hook(
     payload: &HookPayload,
     cwd: &Path,
     trust: &TrustStore,
+    sandbox: Option<&dyn ChildSandbox>,
 ) -> HookOutcome {
     if spec.event != HookEvent::AfterTool || !spec.enabled {
         return HookOutcome::Recorded {
@@ -132,7 +134,7 @@ pub fn run_after_hook(
             note: format!("after-hook {} is not trusted", spec.id),
         };
     }
-    match execute(spec, payload, cwd) {
+    match execute(spec, payload, cwd, sandbox) {
         Ok(stdout) => HookOutcome::Recorded {
             ok: true,
             note: format!("after-hook {} completed: {}", spec.id, truncate(&stdout, 256)),
@@ -148,6 +150,7 @@ fn execute(
     spec: &HookSpec,
     payload: &HookPayload,
     cwd: &Path,
+    sandbox: Option<&dyn ChildSandbox>,
 ) -> Result<String, String> {
     let request = ExecRequest {
         argv: spec.argv.clone(),
@@ -161,7 +164,10 @@ fn execute(
     if payload_bytes.len() > HOOK_STDIN_MAX_BYTES {
         payload_bytes.truncate(HOOK_STDIN_MAX_BYTES);
     }
-    let outcome = run_with_stdin(&request, Some(&payload_bytes));
+    let outcome = match sandbox {
+        Some(sandbox) => sandbox.run_with_stdin(&request, Some(&payload_bytes)),
+        None => run_with_stdin(&request, Some(&payload_bytes)),
+    };
     match outcome.status {
         ExecStatus::Exited if outcome.exit_code == Some(0) => Ok(outcome.stdout),
         ExecStatus::Exited => Err(format!(
@@ -236,7 +242,8 @@ mod tests {
                 &payload(),
                 &cwd,
                 &TrustStore::new(),
-                &CancellationToken::new()
+                &CancellationToken::new(),
+                None
             ),
             HookOutcome::Denied { .. }
         ));
@@ -253,7 +260,8 @@ mod tests {
                 &payload(),
                 &cwd,
                 &TrustStore::new(),
-                &CancellationToken::new()
+                &CancellationToken::new(),
+                None
             ),
             HookOutcome::Continue
         );

@@ -18,6 +18,7 @@ use bollo_modes::{constrain, effective, ModeDescriptor};
 use bollo_policy::approval::{
     pending_receipt, ApprovalState, DEFAULT_APPROVAL_TTL_SECONDS, MemoryApprovalStore,
 };
+use bollo_policy::classifier::ClassifierGate;
 use bollo_policy::evaluate::{evaluate, PolicyDecision};
 use bollo_policy::gate::{authorize, Authorization};
 use bollo_policy::layers::PolicySnapshot;
@@ -42,9 +43,10 @@ use bollo_store::{CheckpointRecord, OperationState, SqliteStore};
 use bollo_tools::execute::{looks_like_verification, McpDispatch};
 use bollo_tools::prepare::PreparedAction;
 use bollo_tools::{execute_with_mcp, ExecuteContext, McpToolSpec, ToolOutcome};
-use bollo_workspace::{Checkpoint, CheckpointLog, WorkspaceFs};
+use bollo_workspace::{Checkpoint, CheckpointLog, ChildSandbox, WorkspaceFs};
 
 use crate::budget::Budget;
+use crate::classifier_audit::ClassifierAudit;
 use crate::compaction;
 use crate::context;
 use crate::scheduler::RunScheduler;
@@ -109,6 +111,9 @@ pub struct RunOutcome {
     pub verification: VerificationStatus,
     pub tool_calls: u32,
     pub usage: crate::budget::UsageTotals,
+    /// Advisory-classifier activity for this run: call counts, availability
+    /// and explicitly unknown cost. Never part of the event stream.
+    pub classifier: ClassifierAudit,
     pub exit_code: i32,
 }
 
@@ -133,6 +138,15 @@ pub struct Runtime<'a> {
     pub mcp_tools: Vec<McpToolSpec>,
     /// Host-supplied MCP dispatch. Absent means MCP calls fail closed.
     pub mcp: Option<&'a mut dyn McpDispatch>,
+    /// Advisory risk classifier (BH-021). Absent means zero calls: escalation
+    /// is opt-in and the default runtime path is unchanged.
+    pub classifier: Option<ClassifierGate<'a>>,
+    /// Enforcement sandbox for brokered children (workspace mode on a host with
+    /// verified containment). Absent means the host broker.
+    pub sandbox: Option<&'a dyn ChildSandbox>,
+    /// Per-run classifier audit, reported through `RunOutcome` and persisted on
+    /// the run record. Never emitted as an event, so the event schema is fixed.
+    classifier_audit: ClassifierAudit,
 }
 
 impl<'a> Runtime<'a> {
@@ -169,7 +183,19 @@ impl<'a> Runtime<'a> {
             include_claude_md: false,
             mcp_tools: Vec::new(),
             mcp: None,
+            classifier: None,
+            sandbox: None,
+            classifier_audit: ClassifierAudit::default(),
         }
+    }
+
+    /// Attach the advisory classifier gate. It is consulted only for eligible
+    /// `allow` decisions and can only turn them into `ask`. Attaching marks the
+    /// run's audit as instrumented, so a reported `0 calls` is a fact.
+    pub fn with_classifier(mut self, gate: ClassifierGate<'a>) -> Self {
+        self.classifier = Some(gate);
+        self.classifier_audit.attached = true;
+        self
     }
 
     /// Add discovered MCP tools to the model-facing tool list.
@@ -187,6 +213,13 @@ impl<'a> Runtime<'a> {
 
     pub fn with_hooks(mut self, hooks: Vec<HookSpec>) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    /// Attach the run's enforcement sandbox. Every brokered child — tool exec,
+    /// git queries and trusted hooks — is launched inside it when present.
+    pub fn with_sandbox(mut self, sandbox: Option<&'a dyn ChildSandbox>) -> Self {
+        self.sandbox = sandbox;
         self
     }
 
@@ -229,7 +262,6 @@ impl<'a> Runtime<'a> {
         let workspace_identity = self.workspace_identity.clone();
         let model = self.model.clone();
         let include_claude_md = self.include_claude_md;
-
         let run_id = match self
             .store
             .start_run(&session, provider.id(), &model, snapshot.revision)
@@ -243,6 +275,7 @@ impl<'a> Runtime<'a> {
                     verification: VerificationStatus::Skipped,
                     tool_calls: 0,
                     usage: Default::default(),
+                    classifier: ClassifierAudit::default(),
                     exit_code: 1,
                 }
             }
@@ -453,6 +486,27 @@ impl<'a> Runtime<'a> {
                     .unwrap_or_else(|| decision.reason.clone());
                 let mode_denied = constrained.mode_denied;
 
+                // Advisory classifier (BH-021): consulted only for an eligible
+                // allow, and it can only escalate allow → ask. Deny/ask, read-
+                // only effects and unselected profiles make zero calls; every
+                // failure is fail-neutral. The verdict never enters the intent
+                // hash, so an issued approval receipt stays valid.
+                let mut escalation_note: Option<String> = None;
+                if effect == Effect::Allow {
+                    if let Some(gate) = &self.classifier {
+                        if let Some(verdict) = gate.hint(&prepared.intent, effect, snapshot.profile)
+                        {
+                            let escalation = gate.apply(effect, &verdict);
+                            self.classifier_audit.record(&verdict, escalation.escalated);
+                            if let Some(note) = escalation.note {
+                                effect = escalation.effect;
+                                reason = format!("{reason}; {note}");
+                                escalation_note = Some(note);
+                            }
+                        }
+                    }
+                }
+
                 if effect != Effect::Deny {
                     let before_hooks: Vec<HookSpec> = self
                         .hooks
@@ -471,7 +525,14 @@ impl<'a> Runtime<'a> {
                             &prepared.intent.summary,
                             None,
                         );
-                        match run_before_hook(&hook, &payload, &workspace_root, trust, &cancel) {
+                        match run_before_hook(
+                            &hook,
+                            &payload,
+                            &workspace_root,
+                            trust,
+                            &cancel,
+                            self.sandbox,
+                        ) {
                             HookOutcome::Continue => {}
                             HookOutcome::Denied { reason: hook_reason } => {
                                 effect = Effect::Deny;
@@ -523,6 +584,12 @@ impl<'a> Runtime<'a> {
 
                 let mut approval_id: Option<ApprovalId> = None;
                 if effect == Effect::Ask {
+                    // An escalation is visible to the approver, not just the
+                    // journal: the advisory reason rides in the summary.
+                    let approval_summary = match &escalation_note {
+                        Some(note) => format!("{} [{note}]", prepared.intent.summary),
+                        None => prepared.intent.summary.clone(),
+                    };
                     let receipt = pending_receipt(
                         &prepared.intent,
                         session.clone(),
@@ -542,7 +609,7 @@ impl<'a> Runtime<'a> {
                         intent_hash: receipt.intent_hash.clone(),
                         policy_revision: snapshot.revision,
                         expires_at: receipt.expires_at.clone(),
-                        summary: prepared.intent.summary.clone(),
+                        summary: approval_summary.clone(),
                     };
                     let _ = emit(
                         self.store,
@@ -555,7 +622,7 @@ impl<'a> Runtime<'a> {
                     let request = ApprovalRequest {
                         approval_id: receipt.approval_id.clone(),
                         tool_name: prepared.tool_name.clone(),
-                        summary: prepared.intent.summary.clone(),
+                        summary: approval_summary,
                         intent_hash: receipt.intent_hash.clone(),
                         policy_revision: snapshot.revision,
                         expires_at: receipt.expires_at.clone(),
@@ -577,6 +644,7 @@ impl<'a> Runtime<'a> {
                                 Some("approval_required"),
                                 verification,
                             );
+                            self.persist_classifier_audit(&run_id);
                             return RunOutcome {
                                 run_id,
                                 state: TerminalState::Blocked,
@@ -584,6 +652,7 @@ impl<'a> Runtime<'a> {
                                 verification,
                                 tool_calls: budget.tool_calls(),
                                 usage: usage.clone(),
+                                classifier: self.classifier_audit.clone(),
                                 exit_code: 3,
                             };
                         }
@@ -741,6 +810,7 @@ impl<'a> Runtime<'a> {
                     let checkpoints: &mut CheckpointLog = &mut *self.checkpoints;
                     let mut context =
                         ExecuteContext::new(fs, checkpoints, snapshot.limits.tool_output_bytes);
+                    context.sandbox = self.sandbox;
                     execute_with_mcp(
                         &prepared,
                         &authorization,
@@ -852,7 +922,7 @@ impl<'a> Runtime<'a> {
                         &prepared.intent.summary,
                         Some(status_text),
                     );
-                    let _ = run_after_hook(&hook, &payload, &workspace_root, trust);
+                    let _ = run_after_hook(&hook, &payload, &workspace_root, trust, self.sandbox);
                 }
             }
         }
@@ -877,6 +947,7 @@ impl<'a> Runtime<'a> {
             sink,
         );
         let _ = self.store.finish_run(&run_id, state, reason, verification);
+        self.persist_classifier_audit(&run_id);
         RunOutcome {
             run_id,
             state,
@@ -884,7 +955,21 @@ impl<'a> Runtime<'a> {
             verification,
             tool_calls: budget.tool_calls(),
             usage: budget.usage().clone(),
+            classifier: self.classifier_audit.clone(),
             exit_code: crate::exit_code_for(state, reason),
+        }
+    }
+
+    /// Persist the classified activity on the run record when a gate was
+    /// attached. Serialization failures and store errors are best-effort: the
+    /// audit must never change the run's outcome, and the event journal already
+    /// proves every decision that was made.
+    fn persist_classifier_audit(&mut self, run_id: &RunId) {
+        if !self.classifier_audit.attached {
+            return;
+        }
+        if let Ok(json) = serde_json::to_string(&self.classifier_audit) {
+            let _ = self.store.record_classifier_audit(run_id, &json);
         }
     }
 }

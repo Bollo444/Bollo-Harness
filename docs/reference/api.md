@@ -1,9 +1,28 @@
 # Optional local API and endpoint documentation
 
-**PROPOSED P2, NOT IMPLEMENTED, NOT REQUIRED FOR MVP.**
+**P2 · not required for MVP. Loopback daemon core implemented (`bollo-api`); the
+`bollo api` CLI surface and remote exposure are not implemented.**
 Canonical contract: [OpenAPI 3.1 JSON](../contracts/openapi.json).
 Example DTOs: [api.json](../examples/api.json). This API is Bollo's original facade;
 it is neither Claude Code's API nor Grok's ACP or tools gRPC interface.
+
+## Implementation status (this pass)
+
+`crates/bollo-api` implements this contract for a loopback-only daemon: the full route
+catalog, constant-time bearer auth with `read`/`run`/`approve` capabilities, Host/Origin
+validation before token handling, 24-hour idempotency receipts that survive a daemon
+restart, SSE replay and live delivery with numeric session cursors, and the documented
+60/min/token and 5-concurrent-stream limits. Request bodies are capped at 1 MiB before
+parsing, and a non-loopback bind is refused until the TLS and origin-allowlist review
+described below. End-to-end behavior is exercised by `crates/bollo-api/tests/http.rs`.
+
+Not yet implemented: the `bollo api` CLI surface and token-generation flow, the runtime
+bridge that executes runs (the daemon exposes a `RunBackend` port for the composition
+root), and any remote/TLS deployment. Event retention is unbounded today, so the
+documented `410 cursor_expired` path is unreachable, and approval views map
+`reason`/`rule_source` from the receipt summary conservatively until the runtime
+supplies richer provenance. The documentation validator still records BH-017 as
+`not_implemented` because it tracks the original docs-only baseline.
 
 ## Deployment, identity and auth
 
@@ -31,7 +50,7 @@ request; it remains a local operator decision at daemon launch.
 | POST /sessions | CreateSession `{label?}`; Idempotency-Key | 201 Session | run | uses daemon workspace; mismatch key/body 409 |
 | GET /sessions/{session_id} | path ID | 200 Session | read | unknown/foreign 404 |
 | POST /sessions/{session_id}/runs | `{prompt}`; Idempotency-Key | 202 Run | run | one active run; busy 409 |
-| GET /runs/{run_id} | path ID | 200 Run | read | terminal state remains readable |
+| GET /runs/{run_id} | path ID | 200 Run | read | terminal state remains readable; includes the persisted classifier audit |
 | POST /runs/{run_id}/cancel | no body | 202 CancelResult | run | idempotent; terminal state remains unchanged |
 | GET /sessions/{session_id}/events | after or Last-Event-ID cursor | 200 SSE Event stream | read | old cursor 410; ahead-of-log or inconsistent cursors 400 |
 | GET /approvals/{approval_id} | path ID | 200 Approval | approve | complete command/diff view, scope and rule source; no secret values |
@@ -48,6 +67,16 @@ HTTP request bodies cap at 1 MiB; approval response bodies cap at 4 MiB encoded.
 No raw exec endpoint, unauthenticated webhook, browser cookie session or write-policy
 endpoint is included. Setting permissions through an HTTP JSON body is not a shortcut
 to bypass the local trust flow.
+
+Run reads (`POST /sessions/{session_id}/runs` and `GET /runs/{run_id}`) include the
+persisted advisory-classifier audit in the `Run.classifier` property: `null` when no gate
+was attached to the run (a new run always starts null), otherwise
+`{attached, calls, availability, escalations, cost_known, cost_microusd}` — counters only,
+never projection content, scores or credentials. `cost_microusd` is null while
+`cost_known` is false (OD-07: no trusted classifier price source yet), never zero. A
+stored audit that no longer decodes also reads as `null`: advisory data never fails a run
+read. The classifier never becomes an event, so the SSE stream stays unchanged
+([design](classifier.md)).
 
 ## Creation and idempotency
 
@@ -100,7 +129,7 @@ Content-Type: application/json
 ```
 
 ```json
-{"id":"run_01","session_id":"ses_01","state":"queued","created_at":"2026-10-03T20:00:00Z","reason":null}
+{"id":"run_01","session_id":"ses_01","state":"queued","created_at":"2026-10-03T20:00:00Z","reason":null,"classifier":null}
 ```
 
 These IDs are examples, not live services. Browser preview clients must use relative
@@ -111,4 +140,6 @@ URLs through the preview server, never hardcoded localhost against a remote sand
 The document covers every endpoint in the proposed OpenAPI contract. It does not
 pretend to list every private endpoint inside upstream products. Tool outputs and
 full future ACP/remote OAuth details need further conformance work before P2 release.
-API DTO fields and schema references are validated now; server behavior is not.
+API DTO fields and schema references are validated by the docs validator, and loopback
+server behavior is now exercised end-to-end by `crates/bollo-api/tests/http.rs`; remote
+exposure remains future work.

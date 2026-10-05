@@ -107,6 +107,32 @@ def main():
     rejects(schemas['config.schema.json'], bad, 'literal secret field')
     bad = copy.deepcopy(base); bad['permissions']['profile'] = 'yolo'
     rejects(schemas['config.schema.json'], bad, 'unknown preset')
+    classifier = copy.deepcopy(base)
+    classifier['classifier'] = {
+        'enabled': True,
+        'origin': 'https://api.typesafe.ai',
+        'model': 'jev-1.13.0',
+        'credential_env': 'TYPESAFE_API_KEY',
+        'timeout_ms': 1500,
+        'escalate_at': 1.0,
+        'min_confidence': 0.5,
+        'credential_threshold': 0.9,
+        'profiles': ['balanced', 'workspace_auto'],
+    }
+    validate(schemas['config.schema.json'], classifier)
+    disabled_classifier = copy.deepcopy(base)
+    disabled_classifier['classifier'] = {'enabled': False}
+    validate(schemas['config.schema.json'], disabled_classifier)
+    bad = copy.deepcopy(classifier); bad['classifier']['origin'] = 'http://api.typesafe.ai'
+    rejects(schemas['config.schema.json'], bad, 'plaintext classifier origin')
+    bad = copy.deepcopy(classifier); bad['classifier']['origin'] = 'https://api.typesafe.ai/v1'
+    rejects(schemas['config.schema.json'], bad, 'classifier origin with a path')
+    bad = copy.deepcopy(classifier); bad['classifier']['api_key'] = 'secret-must-not-be-a-config-field'
+    rejects(schemas['config.schema.json'], bad, 'unknown classifier field')
+    bad = copy.deepcopy(classifier); bad['classifier']['profiles'] = ['yolo']
+    rejects(schemas['config.schema.json'], bad, 'unknown classifier profile')
+    bad = copy.deepcopy(classifier); bad['classifier']['escalate_at'] = 1.5
+    rejects(schemas['config.schema.json'], bad, 'classifier threshold out of range')
     bad = copy.deepcopy(events[0]); bad['data'] = {'state': 'completed'}
     rejects(schemas['event.schema.json'], bad, 'wrong typed event payload')
     bad = copy.deepcopy(events[0]); bad['run_id'] = None
@@ -124,7 +150,7 @@ def main():
 
     # Requirement/document/test mapping, not runtime acceptance execution.
     registry = load(DOCS / 'product/requirements.json')['requirements']
-    check([r['id'] for r in registry] == [f'BH-{i:03}' for i in range(1, 21)], 'Requirement IDs missing/reordered')
+    check([r['id'] for r in registry] == [f'BH-{i:03}' for i in range(1, 22)], 'Requirement IDs missing/reordered')
     check(len({r['acceptance_test'] for r in registry}) == len(registry), 'Duplicate acceptance IDs')
     trace = (DOCS / 'product/traceability.md').read_text(encoding='utf-8')
     tests = (DOCS / 'delivery/testing.md').read_text(encoding='utf-8')

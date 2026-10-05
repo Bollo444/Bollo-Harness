@@ -1645,6 +1645,62 @@
                 "type": "null"
               }
             ]
+          },
+          "classifier": {
+            "description": "Persisted advisory-classifier audit (BH-021); null when no gate was attached or the stored audit no longer decodes. Unknown cost is null while cost_known is false, never zero (OD-07).",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "attached": {
+                    "type": "boolean",
+                    "description": "True when a gate was attached, so zero calls is a fact rather than absent instrumentation."
+                  },
+                  "calls": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "availability": {
+                    "type": "object",
+                    "description": "Verdict counts keyed by availability: available, disabled, unreachable, timeout, unauthorized, rate_limited, invalid_response, service_error.",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "escalations": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "cost_known": {
+                    "type": "boolean"
+                  },
+                  "cost_microusd": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "attached",
+                  "calls",
+                  "availability",
+                  "escalations",
+                  "cost_known",
+                  "cost_microusd"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1652,7 +1708,8 @@
           "session_id",
           "state",
           "created_at",
-          "reason"
+          "reason",
+          "classifier"
         ],
         "additionalProperties": false
       },

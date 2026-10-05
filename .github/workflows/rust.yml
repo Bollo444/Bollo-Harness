@@ -1,0 +1,31 @@
+name: Rust workspace (Windows)
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust 1.93.1
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal --no-self-update
+          rustup default 1.93.1
+          rustc --version
+          cargo --version
+      - name: Build workspace
+        run: cargo build --workspace --locked
+      - name: Test workspace (bollo-api excluded)
+        run: cargo test --workspace --exclude bollo-api --no-fail-fast --locked
+      # bollo-api's loopback HTTP tests contend for ephemeral ports when run in
+      # parallel; they run single-threaded for a deterministic result.
+      - name: Test bollo-api (single-threaded)
+        run: cargo test -p bollo-api --no-fail-fast --locked -- --test-threads=1

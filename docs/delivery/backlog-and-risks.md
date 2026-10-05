@@ -40,6 +40,8 @@ PROPOSAL · [MPP](master-project-plan.md) supplies phases; [traceability](../pro
 | R-10 | Rust integration effort underestimated | medium / medium | P0 spikes; smaller crates and measured re-estimate | tech lead |
 | R-11 | "All docs" mistaken for product completeness | high / medium | status banners, coverage ledger and release evidence | docs owner |
 | R-12 | Contract/prose drift | medium / high | automated links/schema/traceability checks plus behavioral review | docs owner |
+| R-13 | Windows containment limits mistaken for a VM | medium / high | AppContainer is a capability sandbox sharing the kernel; document the shares/denies boundary, keep MCP servers and provider transport outside the brokered container, and revoke DACL grants on drop | security reviewer |
+| R-14 | Stable capability grants outlive the sandbox run | medium / medium | one capability per host toolchain and per canonical workspace; toolchain grants are read-only, credential stores are structurally excluded and refused as conflicts; identity and limits recorded in ADR-012; add a revoke/refresh command before broad host read grants | security reviewer |
 
 Initial likelihoods are qualitative planning assessments, not measured probabilities.
 Review each at phase gates, record mitigation evidence and explicitly accept residual

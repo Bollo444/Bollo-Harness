@@ -12,7 +12,7 @@ use bollo_policy::gate::Authorization;
 use bollo_policy::normalize::intent_hash;
 use bollo_protocol::errors::ErrorCode;
 use bollo_protocol::vocab::ToolStatus;
-use bollo_workspace::process::{run, ExecRequest, ExecStatus};
+use bollo_workspace::process::{run, ChildSandbox, ExecOutcome, ExecRequest, ExecStatus};
 use bollo_workspace::{CheckpointLog, WorkspaceFs};
 
 use crate::prepare::{PreparedAction, PreparedTool};
@@ -27,6 +27,9 @@ pub struct ExecuteContext<'a> {
     pub checkpoints: &'a mut CheckpointLog,
     pub max_output_bytes: u64,
     pub git_timeout: Duration,
+    /// Enforcement sandbox for brokered children (workspace mode on a host with
+    /// verified containment). `None` means the host broker.
+    pub sandbox: Option<&'a dyn ChildSandbox>,
 }
 
 impl<'a> ExecuteContext<'a> {
@@ -36,7 +39,17 @@ impl<'a> ExecuteContext<'a> {
             checkpoints,
             max_output_bytes,
             git_timeout: Duration::from_secs(30),
+            sandbox: None,
         }
+    }
+}
+
+/// Route a brokered child through the active sandbox when one is attached,
+/// otherwise through the host broker. Semantics are identical either way.
+fn run_child(ctx: &ExecuteContext<'_>, request: &ExecRequest) -> ExecOutcome {
+    match ctx.sandbox {
+        Some(sandbox) => sandbox.run(request),
+        None => run(request),
     }
 }
 
@@ -394,7 +407,7 @@ pub fn execute_with_mcp<D: McpDispatch + ?Sized>(
                 env: BTreeMap::new(),
                 max_output_bytes: ctx.max_output_bytes,
             };
-            let outcome = run(&request);
+            let outcome = run_child(ctx, &request);
             let status = match (outcome.status, outcome.reaped, outcome.exit_code) {
                 (ExecStatus::Exited, _, Some(0)) => ToolStatus::Succeeded,
                 (ExecStatus::Exited, _, _) => ToolStatus::Failed,
@@ -537,7 +550,7 @@ fn git_outcome(
         env,
         max_output_bytes: ctx.max_output_bytes,
     };
-    let outcome = run(&request);
+    let outcome = run_child(ctx, &request);
     let data = GitData {
         stdout: if outcome.stdout.is_empty() {
             outcome.stderr.clone()
@@ -757,6 +770,77 @@ mod tests {
         let outcome = execute(&prepared, &auth, &mut ctx);
         assert_eq!(outcome.status, ToolStatus::Succeeded);
         assert!(outcome.data["stdout"].as_str().unwrap().contains("tool-ok"));
+    }
+
+    /// Records broker routing: every child offered to this backend is counted
+    /// and answered with canned output, so a test can prove a child never ran
+    /// on the host.
+    #[derive(Default)]
+    struct RecordingSandbox {
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl ChildSandbox for RecordingSandbox {
+        fn run_with_stdin(
+            &self,
+            request: &ExecRequest,
+            _stdin_bytes: Option<&[u8]>,
+        ) -> ExecOutcome {
+            self.calls.set(self.calls.get() + 1);
+            ExecOutcome {
+                status: ExecStatus::Exited,
+                exit_code: Some(0),
+                stdout: format!("sandboxed:{}", request.argv.join(" ")),
+                stderr: String::new(),
+                truncated: false,
+                duration_ms: 0,
+                reaped: true,
+            }
+        }
+    }
+
+    #[test]
+    fn exec_is_routed_through_the_attached_sandbox() {
+        let (_dir, fs, mut checkpoints) = setup();
+        #[cfg(windows)]
+        let argv = json!(["cmd", "/C", "echo host-only"]);
+        #[cfg(unix)]
+        let argv = json!(["sh", "-c", "echo host-only"]);
+        let prepared = prepare_tool(
+            "exec",
+            json!({"argv": argv, "cwd": ".", "timeout_seconds": 20}),
+            &fs,
+        );
+        let auth = authorize_allow(&prepared);
+        let sandbox = RecordingSandbox::default();
+        let mut ctx = ExecuteContext::new(&fs, &mut checkpoints, 4096);
+        ctx.sandbox = Some(&sandbox);
+        let outcome = execute(&prepared, &auth, &mut ctx);
+        assert_eq!(outcome.status, ToolStatus::Succeeded);
+        assert_eq!(sandbox.calls.get(), 1);
+        // The host command would print exactly `host-only`; this output can
+        // only come from the sandbox backend.
+        let stdout = outcome.data["stdout"].as_str().unwrap();
+        assert!(stdout.contains("sandboxed:"), "stdout: {stdout}");
+        assert_ne!(stdout.trim(), "host-only");
+    }
+
+    #[test]
+    fn git_children_take_the_same_route_as_exec() {
+        let (dir, fs, mut checkpoints) = setup();
+        let sandbox = RecordingSandbox::default();
+        let mut ctx = ExecuteContext::new(&fs, &mut checkpoints, 4096);
+        ctx.sandbox = Some(&sandbox);
+        let request = ExecRequest {
+            argv: vec!["git".into(), "status".into()],
+            cwd: dir.path().to_path_buf(),
+            timeout: Duration::from_secs(5),
+            env: std::collections::BTreeMap::new(),
+            max_output_bytes: 4096,
+        };
+        let outcome = run_child(&ctx, &request);
+        assert_eq!(sandbox.calls.get(), 1);
+        assert!(outcome.stdout.contains("sandboxed:git status"));
     }
 
     #[test]

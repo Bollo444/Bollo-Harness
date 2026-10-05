@@ -134,6 +134,86 @@ fn default_retention_days() -> u32 {
     30
 }
 
+// Canonical classifier defaults (BH-021). `bollo-classifier` aliases these so
+// the schema, the parser and the adapter cannot drift apart.
+pub const CLASSIFIER_DEFAULT_ORIGIN: &str = "https://api.typesafe.ai";
+pub const CLASSIFIER_DEFAULT_MODEL: &str = "jev-1.13.0";
+pub const CLASSIFIER_DEFAULT_CREDENTIAL_ENV: &str = "TYPESAFE_API_KEY";
+pub const CLASSIFIER_DEFAULT_TIMEOUT_MS: u64 = 1_500;
+pub const CLASSIFIER_MIN_TIMEOUT_MS: u64 = 100;
+pub const CLASSIFIER_MAX_TIMEOUT_MS: u64 = 10_000;
+pub const CLASSIFIER_DEFAULT_ESCALATE_AT: f64 = 1.0;
+pub const CLASSIFIER_DEFAULT_MIN_CONFIDENCE: f64 = 0.5;
+pub const CLASSIFIER_DEFAULT_CREDENTIAL_THRESHOLD: f64 = 0.9;
+
+/// Advisory classifier section (BH-021), strict like the rest of the schema.
+/// Absent means disabled; present means every field is validated even while
+/// `enabled` is false, so enabling later is a pure switch, never a surprise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassifierConfig {
+    /// Opt-in. The default build still has no live transport, so an enabled
+    /// block alone cannot emit traffic without the `live-http` feature.
+    pub enabled: bool,
+    #[serde(default = "default_classifier_origin")]
+    pub origin: String,
+    #[serde(default = "default_classifier_model")]
+    pub model: String,
+    #[serde(default = "default_classifier_credential_env")]
+    pub credential_env: String,
+    #[serde(default = "default_classifier_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_classifier_escalate_at")]
+    pub escalate_at: f64,
+    #[serde(default = "default_classifier_min_confidence")]
+    pub min_confidence: f64,
+    #[serde(default = "default_classifier_credential_threshold")]
+    pub credential_threshold: f64,
+    #[serde(default = "default_classifier_profiles")]
+    pub profiles: Vec<Profile>,
+}
+
+fn default_classifier_origin() -> String {
+    CLASSIFIER_DEFAULT_ORIGIN.to_string()
+}
+fn default_classifier_model() -> String {
+    CLASSIFIER_DEFAULT_MODEL.to_string()
+}
+fn default_classifier_credential_env() -> String {
+    CLASSIFIER_DEFAULT_CREDENTIAL_ENV.to_string()
+}
+fn default_classifier_timeout_ms() -> u64 {
+    CLASSIFIER_DEFAULT_TIMEOUT_MS
+}
+fn default_classifier_escalate_at() -> f64 {
+    CLASSIFIER_DEFAULT_ESCALATE_AT
+}
+fn default_classifier_min_confidence() -> f64 {
+    CLASSIFIER_DEFAULT_MIN_CONFIDENCE
+}
+fn default_classifier_credential_threshold() -> f64 {
+    CLASSIFIER_DEFAULT_CREDENTIAL_THRESHOLD
+}
+fn default_classifier_profiles() -> Vec<Profile> {
+    vec![Profile::Balanced, Profile::WorkspaceAuto]
+}
+
+impl Default for ClassifierConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            origin: default_classifier_origin(),
+            model: default_classifier_model(),
+            credential_env: default_classifier_credential_env(),
+            timeout_ms: default_classifier_timeout_ms(),
+            escalate_at: default_classifier_escalate_at(),
+            min_confidence: default_classifier_min_confidence(),
+            credential_threshold: default_classifier_credential_threshold(),
+            profiles: default_classifier_profiles(),
+        }
+    }
+}
+
 impl Default for PrivacyConfig {
     fn default() -> Self {
         Self {
@@ -182,7 +262,7 @@ pub struct McpServerConfig {
 }
 
 /// Trusted user configuration (`~/.config/bollo/config.json`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BolloConfig {
     pub schema_version: String,
@@ -197,6 +277,10 @@ pub struct BolloConfig {
     pub mcp_servers: Vec<McpServerConfig>,
     #[serde(default)]
     pub hooks: Vec<HookConfig>,
+    /// Advisory classifier (BH-021). Absent means the default: disabled, zero
+    /// calls. Project configuration can never carry this block.
+    #[serde(default)]
+    pub classifier: ClassifierConfig,
 }
 
 /// Project configuration (`<workspace>/.bollo/config.json`). Untrusted: it can
@@ -238,6 +322,7 @@ pub fn parse_user_config(json: &str) -> Result<BolloConfig, PolicyError> {
             "privacy.content_retention_days must be 1..=3650".into(),
         ));
     }
+    validate_classifier(&config.classifier)?;
     for hook in &config.hooks {
         if hook.argv.is_empty() {
             return Err(PolicyError::Config(format!(
@@ -327,17 +412,11 @@ fn validate_common(schema_version: &str, rules: &[RuleConfig]) -> Result<(), Pol
 }
 
 fn validate_provider(provider: &ProviderConfig) -> Result<(), PolicyError> {
-    validate_base_url(&provider.base_url)?;
+    validate_https_origin(&provider.base_url, "provider.base_url")?;
     if provider.model.trim().is_empty() {
         return Err(PolicyError::Config("provider.model must not be empty".into()));
     }
-    let env = &provider.credential_env;
-    let valid_env = !env.is_empty()
-        && !env.starts_with(|c: char| c.is_ascii_digit())
-        && env
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-    if !valid_env {
+    if !is_credential_env_name(&provider.credential_env) {
         return Err(PolicyError::Config(
             "provider.credential_env must match ^[A-Z_][A-Z0-9_]*$ (a variable name, never a secret)"
                 .into(),
@@ -351,38 +430,92 @@ fn validate_provider(provider: &ProviderConfig) -> Result<(), PolicyError> {
     Ok(())
 }
 
-fn validate_base_url(url: &str) -> Result<(), PolicyError> {
+/// Credential references are environment variable names, never secrets.
+fn is_credential_env_name(env: &str) -> bool {
+    !env.is_empty()
+        && !env.starts_with(|c: char| c.is_ascii_digit())
+        && env
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Reject anything that is not an exact HTTPS origin. `label` names the field
+/// so the diagnostics stay source-aware.
+fn validate_https_origin(url: &str, label: &str) -> Result<(), PolicyError> {
     let rest = url.strip_prefix("https://").ok_or_else(|| {
         PolicyError::Config(format!(
-            "provider.base_url {url:?} must be an https origin (no http://, no path)"
+            "{label} {url:?} must be an https origin (no http://, no path)"
         ))
     })?;
     if rest.is_empty() {
-        return Err(PolicyError::Config(
-            "provider.base_url has an empty origin".into(),
-        ));
+        return Err(PolicyError::Config(format!("{label} has an empty origin")));
     }
     if rest.contains('@') {
-        return Err(PolicyError::Config(
-            "provider.base_url must not embed credentials".into(),
-        ));
+        return Err(PolicyError::Config(format!(
+            "{label} must not embed credentials"
+        )));
     }
     if rest.contains('#') || rest.contains('?') {
-        return Err(PolicyError::Config(
-            "provider.base_url must not contain a fragment or query".into(),
-        ));
+        return Err(PolicyError::Config(format!(
+            "{label} must not contain a fragment or query"
+        )));
     }
     let authority = rest.split('/').next().unwrap_or_default();
-    let has_path = rest.len() > authority.len() && rest[authority.len()..].trim_matches('/').len() > 0;
+    let has_path =
+        rest.len() > authority.len() && rest[authority.len()..].trim_matches('/').len() > 0;
     if has_path {
-        return Err(PolicyError::Config(
-            "provider.base_url must be an origin; the adapter appends the documented path".into(),
-        ));
+        return Err(PolicyError::Config(format!(
+            "{label} must be an origin; the adapter appends the documented path"
+        )));
     }
     if authority.is_empty() || authority.starts_with(':') {
+        return Err(PolicyError::Config(format!(
+            "{label} has an invalid authority"
+        )));
+    }
+    Ok(())
+}
+
+/// The classifier block is strict even while `enabled` is false: thresholds,
+/// origins and credential names are checked now, so flipping `enabled` cannot
+/// surface a latent configuration error at the first eligible decision.
+fn validate_classifier(classifier: &ClassifierConfig) -> Result<(), PolicyError> {
+    validate_https_origin(&classifier.origin, "classifier.origin")?;
+    if classifier.model.trim().is_empty() {
         return Err(PolicyError::Config(
-            "provider.base_url has an invalid authority".into(),
+            "classifier.model must not be empty".into(),
         ));
+    }
+    if !is_credential_env_name(&classifier.credential_env) {
+        return Err(PolicyError::Config(
+            "classifier.credential_env must match ^[A-Z_][A-Z0-9_]*$ (a variable name, never a secret)"
+                .into(),
+        ));
+    }
+    if !(CLASSIFIER_MIN_TIMEOUT_MS..=CLASSIFIER_MAX_TIMEOUT_MS).contains(&classifier.timeout_ms) {
+        return Err(PolicyError::Config(format!(
+            "classifier.timeout_ms must be {CLASSIFIER_MIN_TIMEOUT_MS}..={CLASSIFIER_MAX_TIMEOUT_MS}"
+        )));
+    }
+    let thresholds = crate::classifier::EscalationThresholds {
+        escalate_at: classifier.escalate_at,
+        min_confidence: classifier.min_confidence,
+        credential_threshold: classifier.credential_threshold,
+    };
+    thresholds.validate().map_err(PolicyError::Config)?;
+    if classifier.profiles.is_empty() {
+        return Err(PolicyError::Config(
+            "classifier.profiles must not be empty".into(),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for profile in &classifier.profiles {
+        if !seen.insert(*profile) {
+            return Err(PolicyError::Config(format!(
+                "classifier.profiles contains duplicate {}",
+                profile.as_str()
+            )));
+        }
     }
     Ok(())
 }
@@ -479,6 +612,126 @@ mod tests {
     fn rejects_env_secret_literal() {
         let json = GOOD.replace("ANTHROPIC_API_KEY", "sk-live-secret-value");
         assert!(parse_user_config(&json).is_err());
+    }
+
+    /// Inject a classifier block into the documented example. The example
+    /// itself intentionally omits it: the block is optional and disabled by
+    /// default.
+    fn with_classifier(fragment: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(GOOD).unwrap();
+        value["classifier"] = serde_json::from_str(fragment).unwrap();
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn classifier_absent_defaults_to_disabled() {
+        let config = parse_user_config(GOOD).unwrap();
+        let classifier = &config.classifier;
+        assert!(!classifier.enabled);
+        assert_eq!(classifier.origin, CLASSIFIER_DEFAULT_ORIGIN);
+        assert_eq!(classifier.model, CLASSIFIER_DEFAULT_MODEL);
+        assert_eq!(classifier.credential_env, CLASSIFIER_DEFAULT_CREDENTIAL_ENV);
+        assert_eq!(classifier.timeout_ms, CLASSIFIER_DEFAULT_TIMEOUT_MS);
+        assert_eq!(classifier.escalate_at, CLASSIFIER_DEFAULT_ESCALATE_AT);
+        assert_eq!(classifier.min_confidence, CLASSIFIER_DEFAULT_MIN_CONFIDENCE);
+        assert_eq!(
+            classifier.credential_threshold,
+            CLASSIFIER_DEFAULT_CREDENTIAL_THRESHOLD
+        );
+        assert_eq!(
+            classifier.profiles,
+            vec![Profile::Balanced, Profile::WorkspaceAuto]
+        );
+    }
+
+    #[test]
+    fn classifier_minimal_block_parses_as_disabled() {
+        let json = with_classifier(r#"{"enabled": false}"#);
+        let config = parse_user_config(&json).unwrap();
+        assert!(!config.classifier.enabled);
+        assert_eq!(config.classifier.model, CLASSIFIER_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn classifier_full_block_parses() {
+        let json = with_classifier(
+            r#"{"enabled": true, "origin": "https://api.typesafe.ai", "model": "jev-1.13.0",
+                "credential_env": "TYPESAFE_API_KEY", "timeout_ms": 2500, "escalate_at": 0.9,
+                "min_confidence": 0.6, "credential_threshold": 0.95,
+                "profiles": ["balanced", "unrestricted"]}"#,
+        );
+        let config = parse_user_config(&json).unwrap();
+        assert!(config.classifier.enabled);
+        assert_eq!(config.classifier.timeout_ms, 2500);
+        assert_eq!(config.classifier.escalate_at, 0.9);
+        assert_eq!(config.classifier.min_confidence, 0.6);
+        assert_eq!(config.classifier.credential_threshold, 0.95);
+        assert_eq!(
+            config.classifier.profiles,
+            vec![Profile::Balanced, Profile::Unrestricted]
+        );
+    }
+
+    #[test]
+    fn classifier_rejects_strict_shape_violations() {
+        // `enabled` is required whenever the block is present.
+        assert!(
+            parse_user_config(&with_classifier(r#"{"origin": "https://api.typesafe.ai"}"#))
+                .is_err()
+        );
+        // Unknown keys are rejected; secrets never become configuration.
+        assert!(parse_user_config(&with_classifier(
+            r#"{"enabled": true, "api_key": "sk-live-secret-value"}"#
+        ))
+        .is_err());
+        // The origin must be an exact HTTPS origin.
+        for origin in [
+            "http://api.typesafe.ai",
+            "https://api.typesafe.ai/v1",
+            "https://api.typesafe.ai?x=1",
+            "https://user:pass@api.typesafe.ai",
+        ] {
+            let json = with_classifier(&format!(r#"{{"enabled": true, "origin": "{origin}"}}"#));
+            assert!(
+                parse_user_config(&json).is_err(),
+                "origin {origin} accepted"
+            );
+        }
+        // The credential field is a variable name, never a secret literal.
+        assert!(parse_user_config(&with_classifier(
+            r#"{"enabled": true, "credential_env": "sk-live-secret-value"}"#
+        ))
+        .is_err());
+        // The advisory deadline is bounded.
+        for timeout in [50, 20_000] {
+            let json = with_classifier(&format!(r#"{{"enabled": true, "timeout_ms": {timeout}}}"#));
+            assert!(
+                parse_user_config(&json).is_err(),
+                "timeout {timeout} accepted"
+            );
+        }
+        // Thresholds are finite probabilities in 0..=1.
+        for fragment in [
+            r#"{"enabled": true, "escalate_at": 1.5}"#,
+            r#"{"enabled": true, "min_confidence": -0.1}"#,
+            r#"{"enabled": true, "credential_threshold": 2}"#,
+        ] {
+            assert!(parse_user_config(&with_classifier(fragment)).is_err());
+        }
+        // Profiles are a non-empty, duplicate-free subset of known profiles.
+        for fragment in [
+            r#"{"enabled": true, "profiles": []}"#,
+            r#"{"enabled": true, "profiles": ["balanced", "balanced"]}"#,
+            r#"{"enabled": true, "profiles": ["yolo"]}"#,
+        ] {
+            assert!(parse_user_config(&with_classifier(fragment)).is_err());
+        }
+    }
+
+    #[test]
+    fn project_config_rejects_classifier_block() {
+        let json = r#"{"schema_version":"0.1","classifier":{"enabled":true}}"#;
+        assert!(parse_project_config(json).is_err());
     }
 
     #[test]

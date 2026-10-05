@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/bollo-protocol",
   "crates/bollo-policy",
+  "crates/bollo-classifier",
   "crates/bollo-workspace",
   "crates/bollo-tools",
   "crates/bollo-providers",
@@ -10,6 +11,7 @@ members = [
   "crates/bollo-extensions",
   "crates/bollo-modes",
   "crates/bollo-core",
+  "crates/bollo-api",
   "crates/bollo-tui",
   "crates/bollo-cli",
   "tests",
@@ -35,6 +37,16 @@ uuid = { version = "1", features = ["v4"] }
 ctrlc = "3"
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
 tempfile = "3"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",    "Win32_System_JobObjects",
+    "Win32_System_SystemServices",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
 
 [profile.release]
 lto = "thin"

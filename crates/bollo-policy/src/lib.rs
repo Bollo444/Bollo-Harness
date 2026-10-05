@@ -8,6 +8,7 @@
 //! rather than by convention.
 
 pub mod approval;
+pub mod classifier;
 pub mod config;
 pub mod evaluate;
 pub mod gate;
@@ -18,7 +19,13 @@ pub use approval::{
     pending_receipt, ApprovalExpectation, ApprovalOutcome, ApprovalReceipt, ApprovalState,
     ApprovalStore, MemoryApprovalStore, ResolveOutcome, DEFAULT_APPROVAL_TTL_SECONDS,
 };
-pub use config::{parse_project_config, parse_user_config, BolloConfig, ProjectConfig};
+pub use classifier::{
+    escalate, Availability, ClassifierGate, ClassifierState, ClassifierVerdict, Escalation,
+    EscalationThresholds, RiskClassifier, ScriptedClassifier,
+};
+pub use config::{
+    parse_project_config, parse_user_config, BolloConfig, ClassifierConfig, ProjectConfig,
+};
 pub use evaluate::{evaluate, PolicyDecision};
 pub use gate::Authorization;
 pub use layers::{build_snapshot, validate_startup, CliOverrides, PolicySnapshot, Source};

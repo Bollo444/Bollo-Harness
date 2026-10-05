@@ -72,6 +72,7 @@ owns semantic consistency.
 
 - [ACP client integration design (future P2)](reference/acp.md)
 - [Optional local API and endpoint documentation](reference/api.md)
+- [Advisory risk classifier (Jev) design](reference/classifier.md)
 - [CLI reference (proposed, not executable yet)](reference/cli.md)
 - [Configuration reference and resolution](reference/configuration.md)
 - [Event stream reference](reference/events.md)

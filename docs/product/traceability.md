@@ -26,3 +26,4 @@ executed by the documentation validator. This matrix is generated from the regis
 | BH-018 — MCP Streamable HTTP | P2 | `bollo-extensions` | [spec](../reference/mcp.md) | [AT-018](../delivery/testing.md) |
 | BH-019 — ACP client adapter | P2 | `bollo-cli` | [spec](../reference/acp.md) | [AT-019](../delivery/testing.md) |
 | BH-020 — Read-only bounded subagents | P3 | `bollo-core` | [spec](../architecture/system-design.md) | [AT-020](../delivery/testing.md) |
+| BH-021 — Advisory risk classifier | P2 | `bollo-policy` | [spec](../reference/classifier.md) | [AT-021](../delivery/testing.md) |

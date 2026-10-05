@@ -3,10 +3,12 @@
 //! scripted approvals) driving the real loop, not a mock of the code under test.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bollo_core::runtime::ApprovalChannel;
 use bollo_core::{RunOutcome, Runtime, ScriptedChannel};
 use bollo_extensions::TrustStore;
+use bollo_policy::classifier::{ClassifierGate, RiskClassifier};
 use bollo_policy::layers::{build_snapshot, validate_startup, CliOverrides, PolicySnapshot};
 use bollo_policy::MemoryApprovalStore;
 use bollo_providers::fake::{FakeProvider, ScriptedResponse};
@@ -35,6 +37,11 @@ pub struct Harness {
     pub mcp_tools: Vec<McpToolSpec>,
     /// Optional MCP dispatch port attached to the next run.
     pub mcp: Option<Box<dyn McpDispatch>>,
+    /// Advisory classifier attached to the next run; `None` makes zero calls.
+    /// Shared by `Arc` so tests can inspect calls after the run.
+    pub classifier: Option<Arc<dyn RiskClassifier>>,
+    /// Profiles where escalation is active when a classifier is attached.
+    pub classifier_profiles: Vec<Profile>,
 }
 
 impl Harness {
@@ -61,6 +68,8 @@ impl Harness {
             cancel: CancellationToken::new(),
             mcp_tools: Vec::new(),
             mcp: None,
+            classifier: None,
+            classifier_profiles: vec![Profile::Balanced, Profile::WorkspaceAuto],
         }
     }
 
@@ -119,6 +128,11 @@ impl Harness {
                 ModeKind::Build,
             );
             runtime = runtime.with_cancel(self.cancel.clone());
+            if let Some(classifier) = self.classifier.as_deref() {
+                runtime = runtime.with_classifier(
+                    ClassifierGate::new(classifier).with_profiles(self.classifier_profiles.clone()),
+                );
+            }
             if let Some(dispatch) = self.mcp.as_deref_mut() {
                 runtime = runtime
                     .with_mcp_tools(self.mcp_tools.clone())

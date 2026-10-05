@@ -84,6 +84,9 @@ pub enum Command {
     /// Local session metadata; never touches source files
     Sessions(SessionsArgs),
 
+    /// Durable run records: usage and classifier audit without the API
+    Runs(RunsArgs),
+
     /// Effective values/rules and their origins
     Policy(PolicyArgs),
 
@@ -164,6 +167,22 @@ pub enum SessionsCommand {
         /// Required confirmation for a destructive local operation
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct RunsArgs {
+    #[command(subcommand)]
+    pub command: RunsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RunsCommand {
+    /// List durable run records, newest first (read-only; no API required)
+    List {
+        /// Restrict the listing to one session (see `bollo sessions list`)
+        #[arg(long, value_name = "SESSION_ID")]
+        session: Option<String>,
     },
 }
 

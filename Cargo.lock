@@ -110,9 +110,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "bollo-api"
+version = "0.1.0"
+dependencies = [
+ "bollo-core",
+ "bollo-policy",
+ "bollo-protocol",
+ "bollo-store",
+ "bollo-workspace",
+ "hex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
+name = "bollo-classifier"
+version = "0.1.0"
+dependencies = [
+ "bollo-policy",
+ "bollo-protocol",
+ "bollo-providers",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "bollo-cli"
 version = "0.1.0"
 dependencies = [
+ "bollo-classifier",
  "bollo-core",
  "bollo-extensions",
  "bollo-modes",
@@ -281,6 +315,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

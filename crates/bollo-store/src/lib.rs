@@ -15,12 +15,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use bollo_protocol::events::UsageUpdatedData;
 use bollo_protocol::ids::{ArtifactId, RunId, SessionId};
 use bollo_protocol::timeutil;
 use bollo_protocol::vocab::{TerminalState, VerificationStatus};
 use bollo_protocol::{EventEnvelope, EventType, ProtocolError};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -119,6 +120,48 @@ pub struct RunRecord {
     pub model_id: String,
 }
 
+/// One run row plus lifecycle timestamps, for API reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunDetail {
+    pub id: RunId,
+    pub session_id: SessionId,
+    pub state: String,
+    pub policy_revision: u64,
+    pub model_id: String,
+    pub provider: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    /// Serialized `bollo-core` classifier audit (call counts, availability,
+    /// unknown cost). The store keeps it opaque so the durable record stays
+    /// additive; `None` means no gate was attached to this run.
+    pub classifier_json: Option<String>,
+}
+
+/// One run row plus the aggregate of its `usage.updated` events, so the
+/// durable record is readable without replaying the journal or calling the
+/// optional API. The run row stays authoritative for state and the classifier
+/// audit; usage is reconstructed from events because no request-level table
+/// exists yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSummary {
+    pub run: RunDetail,
+    /// `None` when the run emitted no `usage.updated` event at all (no model
+    /// response was recorded, e.g. an ask blocked before the first request).
+    pub usage: Option<RunUsage>,
+}
+
+/// Run-level usage rebuilt from `usage.updated` events: token counts are
+/// summed per response (the events carry per-response deltas), while cost is
+/// the cumulative figure carried by the last event. Unknown cost stays `None`,
+/// never zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_microusd: Option<u64>,
+    pub cost_known: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
     pub id: SessionId,
@@ -186,11 +229,11 @@ impl SqliteStore {
                  applied_at TEXT NOT NULL
              );",
         )?;
-        let current: Option<i64> = self.conn.query_row(
-            "SELECT MAX(version) FROM schema_migrations",
-            [],
-            |row| row.get::<_, Option<i64>>(0),
-        )?;
+        let current: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                    row.get::<_, Option<i64>>(0)
+                })?;
         let current = current.unwrap_or(0);
         for (version, migration) in MIGRATIONS {
             if *version <= current {
@@ -270,7 +313,11 @@ impl SqliteStore {
     }
 
     /// Replay events after a cursor; clients deduplicate by `event_id`.
-    pub fn replay(&self, session: &SessionId, after: u64) -> Result<Vec<EventEnvelope>, StoreError> {
+    pub fn replay(
+        &self,
+        session: &SessionId,
+        after: u64,
+    ) -> Result<Vec<EventEnvelope>, StoreError> {
         let mut statement = self.conn.prepare(
             "SELECT envelope_json FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC",
         )?;
@@ -281,11 +328,71 @@ impl SqliteStore {
         let mut events = Vec::new();
         for row in rows {
             let json = row?;
-            let envelope: EventEnvelope =
-                serde_json::from_str(&json).map_err(|err| StoreError::Serialization(err.to_string()))?;
+            let envelope: EventEnvelope = serde_json::from_str(&json)
+                .map_err(|err| StoreError::Serialization(err.to_string()))?;
             events.push(envelope);
         }
         Ok(events)
+    }
+
+    /// Look up one session's metadata; `NotFound` for unknown ids.
+    pub fn session(&self, session: &SessionId) -> Result<SessionRecord, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, workspace_identity, created_at, last_seq, label\n                 FROM sessions WHERE id = ?1",
+                params![session.as_str()],
+                |row| {
+                    let id: String = row.get(0)?;
+                    Ok(SessionRecord {
+                        id: SessionId::parse(id).unwrap_or_else(|_| SessionId::generate()),
+                        workspace_identity: row.get(1)?,
+                        created_at: row.get(2)?,
+                        last_seq: row.get::<_, i64>(3)? as u64,
+                        label: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound(format!("session {session}")))
+    }
+
+    /// Look up one run including its lifecycle timestamps and classifier audit.
+    pub fn run(&self, run: &RunId) -> Result<RunDetail, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, session_id, state, policy_revision, model_id, provider, started_at, \
+                 ended_at, classifier_json\n                 FROM runs WHERE id = ?1",
+                params![run.as_str()],
+                read_run_detail_row,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound(format!("run {run}")))
+    }
+
+    /// Run records, newest first, each with its aggregated usage. `session`
+    /// narrows the listing; `None` reads every run in this store. Read-only:
+    /// the durable record is readable without replaying events or starting the
+    /// optional API.
+    pub fn list_run_summaries(
+        &self,
+        session: Option<&SessionId>,
+    ) -> Result<Vec<RunSummary>, StoreError> {
+        let mut runs_statement = self.conn.prepare(
+            "SELECT id, session_id, state, policy_revision, model_id, provider, started_at, \
+             ended_at, classifier_json\n             FROM runs\n             WHERE (?1 IS NULL OR session_id = ?1)\n             ORDER BY started_at DESC, rowid DESC",
+        )?;
+        let mut usage_statement = self.conn.prepare(
+            "SELECT envelope_json FROM events\n             WHERE run_id = ?1 AND type = 'usage.updated'\n             ORDER BY seq ASC",
+        )?;
+        let filter = session.map(SessionId::as_str);
+        let rows = runs_statement.query_map(params![filter], read_run_detail_row)?;
+        let mut summaries = Vec::new();
+        for row in rows {
+            let run = row?;
+            let usage = run_usage_from_events(&mut usage_statement, &run.id)?;
+            summaries.push(RunSummary { run, usage });
+        }
+        Ok(summaries)
     }
 
     pub fn start_run(
@@ -325,6 +432,25 @@ impl SqliteStore {
         let updated = self.conn.execute(
             "UPDATE runs SET state = ?1, ended_at = ?2 WHERE id = ?3",
             params![state_text, timeutil::now_rfc3339(), run.as_str()],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::NotFound(format!("run {run}")));
+        }
+        Ok(())
+    }
+
+    /// Persist the per-run advisory-classifier audit (BH-021) exactly as
+    /// `bollo-core` serialized it. The store treats the JSON as opaque, so a
+    /// future audit shape needs no migration; `None` (a run without an
+    /// attached gate) stays null rather than an empty object.
+    pub fn record_classifier_audit(
+        &mut self,
+        run: &RunId,
+        classifier_json: &str,
+    ) -> Result<(), StoreError> {
+        let updated = self.conn.execute(
+            "UPDATE runs SET classifier_json = ?1 WHERE id = ?2",
+            params![classifier_json, run.as_str()],
         )?;
         if updated == 0 {
             return Err(StoreError::NotFound(format!("run {run}")));
@@ -452,8 +578,7 @@ impl SqliteStore {
             let session_id: String = row.get(1)?;
             Ok(RunRecord {
                 id: RunId::parse(id).unwrap_or_else(|_| RunId::generate()),
-                session_id: SessionId::parse(session_id)
-                    .unwrap_or_else(|_| SessionId::generate()),
+                session_id: SessionId::parse(session_id).unwrap_or_else(|_| SessionId::generate()),
                 state: row.get(2)?,
                 policy_revision: row.get::<_, i64>(3)? as u64,
                 model_id: row.get(4)?,
@@ -595,6 +720,29 @@ impl SqliteStore {
         media_type: &str,
         retention_class: &str,
     ) -> Result<ArtifactRef, StoreError> {
+        self.write_artifact_record(directory, bytes, media_type, retention_class, None)
+    }
+
+    /// Artifact bound to a run so `GET /v1/runs/{id}/artifacts` can list it.
+    pub fn write_run_artifact(
+        &mut self,
+        directory: &Path,
+        bytes: &[u8],
+        media_type: &str,
+        retention_class: &str,
+        run: &RunId,
+    ) -> Result<ArtifactRef, StoreError> {
+        self.write_artifact_record(directory, bytes, media_type, retention_class, Some(run))
+    }
+
+    fn write_artifact_record(
+        &mut self,
+        directory: &Path,
+        bytes: &[u8],
+        media_type: &str,
+        retention_class: &str,
+        run: Option<&RunId>,
+    ) -> Result<ArtifactRef, StoreError> {
         std::fs::create_dir_all(directory)?;
         let hash = hex::encode(Sha256::digest(bytes));
         let relative_path = format!("sha256-{hash}");
@@ -611,8 +759,8 @@ impl SqliteStore {
         }
         let id = ArtifactId::generate();
         self.conn.execute(
-            "INSERT INTO artifacts(id, hash, bytes, media_type, relative_path, retention_class, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO artifacts(id, hash, bytes, media_type, relative_path, retention_class, run_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 id.as_str(),
                 hash,
@@ -620,6 +768,7 @@ impl SqliteStore {
                 media_type,
                 relative_path,
                 retention_class,
+                run.map(|run| run.as_str()),
                 timeutil::now_rfc3339()
             ],
         )?;
@@ -632,11 +781,30 @@ impl SqliteStore {
         })
     }
 
-    pub fn read_artifact(
-        &self,
-        directory: &Path,
-        id: &ArtifactId,
-    ) -> Result<Vec<u8>, StoreError> {
+    /// Artifacts recorded for one run, oldest first.
+    pub fn artifacts_for_run(&self, run: &RunId) -> Result<Vec<ArtifactRef>, StoreError> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, hash, bytes, media_type, relative_path FROM artifacts
+             WHERE run_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![run.as_str()], |row| {
+            let id: String = row.get(0)?;
+            Ok(ArtifactRef {
+                id: ArtifactId::parse(id).unwrap_or_else(|_| ArtifactId::generate()),
+                hash: row.get(1)?,
+                bytes: row.get::<_, i64>(2)? as u64,
+                media_type: row.get(3)?,
+                relative_path: row.get(4)?,
+            })
+        })?;
+        let mut artifacts = Vec::new();
+        for row in rows {
+            artifacts.push(row?);
+        }
+        Ok(artifacts)
+    }
+
+    pub fn read_artifact(&self, directory: &Path, id: &ArtifactId) -> Result<Vec<u8>, StoreError> {
         let relative: Option<String> = self
             .conn
             .query_row(
@@ -645,9 +813,29 @@ impl SqliteStore {
                 |row| row.get(0),
             )
             .optional()?;
-        let relative =
-            relative.ok_or_else(|| StoreError::NotFound(format!("artifact {id}")))?;
+        let relative = relative.ok_or_else(|| StoreError::NotFound(format!("artifact {id}")))?;
         std::fs::read(directory.join(relative)).map_err(StoreError::from)
+    }
+
+    /// Metadata for one artifact, without reading its bytes.
+    pub fn artifact(&self, id: &ArtifactId) -> Result<ArtifactRef, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT id, hash, bytes, media_type, relative_path FROM artifacts WHERE id = ?1",
+                params![id.as_str()],
+                |row| {
+                    let id: String = row.get(0)?;
+                    Ok(ArtifactRef {
+                        id: ArtifactId::parse(id).unwrap_or_else(|_| ArtifactId::generate()),
+                        hash: row.get(1)?,
+                        bytes: row.get::<_, i64>(2)? as u64,
+                        media_type: row.get(3)?,
+                        relative_path: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::NotFound(format!("artifact {id}")))
     }
 
     pub fn artifact_count(&self) -> Result<u64, StoreError> {
@@ -658,11 +846,11 @@ impl SqliteStore {
     }
 
     pub fn schema_version(&self) -> Result<i64, StoreError> {
-        let version: Option<i64> = self.conn.query_row(
-            "SELECT MAX(version) FROM schema_migrations",
-            [],
-            |row| row.get::<_, Option<i64>>(0),
-        )?;
+        let version: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                    row.get::<_, Option<i64>>(0)
+                })?;
         Ok(version.unwrap_or(0))
     }
 }
@@ -738,8 +926,71 @@ CREATE TABLE IF NOT EXISTS checkpoints(
 CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);
 "#;
 
+/// Durable schema v3: artifacts can be attributed to the run that produced
+/// them, so the optional API can list run outputs.
+const MIGRATION_3: &str = r#"
+ALTER TABLE artifacts ADD COLUMN run_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id);
+"#;
+
+/// Durable schema v4: the per-run classifier audit (BH-021) is stored beside
+/// the run it describes. The JSON is written by `bollo-core`; the event schema
+/// is untouched, so exported NDJSON stays byte-compatible.
+const MIGRATION_4: &str = r#"
+ALTER TABLE runs ADD COLUMN classifier_json TEXT;
+"#;
+
 /// Ordered, forward-only migrations applied in version order.
-const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (2, MIGRATION_2)];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, MIGRATION_1),
+    (2, MIGRATION_2),
+    (3, MIGRATION_3),
+    (4, MIGRATION_4),
+];
+
+fn read_run_detail_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunDetail> {
+    let id: String = row.get(0)?;
+    let session_id: String = row.get(1)?;
+    Ok(RunDetail {
+        id: RunId::parse(id).unwrap_or_else(|_| RunId::generate()),
+        session_id: SessionId::parse(session_id).unwrap_or_else(|_| SessionId::generate()),
+        state: row.get(2)?,
+        policy_revision: row.get::<_, i64>(3)? as u64,
+        model_id: row.get(4)?,
+        provider: row.get(5)?,
+        started_at: row.get(6)?,
+        ended_at: row.get(7)?,
+        classifier_json: row.get(8)?,
+    })
+}
+
+/// Fold one run's `usage.updated` events into a run-level figure. A persisted
+/// event that no longer decodes is an error rather than silently-zeroed usage.
+fn run_usage_from_events(
+    statement: &mut rusqlite::Statement<'_>,
+    run: &RunId,
+) -> Result<Option<RunUsage>, StoreError> {
+    let rows = statement.query_map(params![run.as_str()], |row| row.get::<_, String>(0))?;
+    let mut totals: Option<RunUsage> = None;
+    for row in rows {
+        let json = row?;
+        let envelope: EventEnvelope = serde_json::from_str(&json)
+            .map_err(|err| StoreError::Serialization(err.to_string()))?;
+        let data: UsageUpdatedData = serde_json::from_value(envelope.data)
+            .map_err(|err| StoreError::Serialization(err.to_string()))?;
+        let entry = totals.get_or_insert_with(RunUsage::default);
+        entry.input_tokens = entry
+            .input_tokens
+            .saturating_add(data.input_tokens.unwrap_or(0));
+        entry.output_tokens = entry
+            .output_tokens
+            .saturating_add(data.output_tokens.unwrap_or(0));
+        // Cost in the event is already cumulative for the run.
+        entry.cost_known = data.cost_known;
+        entry.cost_microusd = data.cost_microusd;
+    }
+    Ok(totals)
+}
 
 fn read_checkpoint_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CheckpointRecord> {
     let session_id: String = row.get(1)?;
@@ -854,9 +1105,109 @@ mod tests {
         assert_eq!(interrupted.len(), 1);
         assert_eq!(interrupted[0].id, run);
         store
-            .finish_run(&run, TerminalState::Completed, None, VerificationStatus::Passed)
+            .finish_run(
+                &run,
+                TerminalState::Completed,
+                None,
+                VerificationStatus::Passed,
+            )
             .unwrap();
         assert!(store.interrupted_runs(&session).unwrap().is_empty());
+    }
+
+    #[test]
+    fn classifier_audit_round_trips_on_the_run_record() {
+        let mut store = store();
+        let session = store.create_session("ws-1", None).unwrap();
+        let run = store.start_run(&session, "anthropic", "model", 1).unwrap();
+        assert!(
+            store.run(&run).unwrap().classifier_json.is_none(),
+            "a run without an attached gate stays null, not an empty object"
+        );
+
+        let audit = r#"{"attached":true,"calls":2,"availability":{"available":1,"timeout":1},
+            "escalations":1,"cost_known":false}"#;
+        store.record_classifier_audit(&run, audit).unwrap();
+        let detail = store.run(&run).unwrap();
+        assert_eq!(detail.classifier_json.as_deref(), Some(audit));
+        assert!(store
+            .record_classifier_audit(&RunId::generate(), audit)
+            .is_err());
+    }
+
+    #[test]
+    fn run_summaries_aggregate_usage_and_keep_newest_first() {
+        let mut store = store();
+        let session = store.create_session("ws-1", None).unwrap();
+        let other = store.create_session("ws-2", None).unwrap();
+        let first = store
+            .start_run(&session, "anthropic", "model-a", 1)
+            .unwrap();
+        let second = store.start_run(&other, "anthropic", "model-b", 1).unwrap();
+
+        // Two responses for one run: token fields are per-response deltas, cost
+        // is the budget's cumulative figure.
+        for (input, output, cost) in [(100u64, 10u64, 450u64), (50, 5, 675)] {
+            store
+                .append_event(
+                    &session,
+                    Some(&first),
+                    EventType::UsageUpdated,
+                    &json!({
+                        "input_tokens": input,
+                        "output_tokens": output,
+                        "cost_microusd": cost,
+                        "cost_known": true,
+                    }),
+                )
+                .unwrap();
+        }
+        // A response with unreported usage still emits an event; unknown cost
+        // stays null, never zero.
+        store
+            .append_event(
+                &other,
+                Some(&second),
+                EventType::UsageUpdated,
+                &json!({
+                    "input_tokens": null,
+                    "output_tokens": null,
+                    "cost_microusd": null,
+                    "cost_known": false,
+                }),
+            )
+            .unwrap();
+
+        let all = store.list_run_summaries(None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].run.id, second, "newest run comes first");
+        assert_eq!(all[1].run.id, first);
+
+        let usage = all[1].usage.clone().expect("usage is reconstructed");
+        assert_eq!(usage.input_tokens, 150, "per-response tokens are summed");
+        assert_eq!(usage.output_tokens, 15);
+        assert_eq!(usage.cost_microusd, Some(675), "cost is already cumulative");
+        assert!(usage.cost_known);
+
+        let unreported = all[0].usage.clone().expect("the event still counts");
+        assert_eq!(unreported.input_tokens, 0);
+        assert_eq!(unreported.cost_microusd, None);
+        assert!(!unreported.cost_known);
+
+        let filtered = store.list_run_summaries(Some(&session)).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].run.id, first);
+
+        // A run with no usage event reports `None`, not zeros.
+        let third = store
+            .start_run(&session, "anthropic", "model-c", 1)
+            .unwrap();
+        let filtered = store.list_run_summaries(Some(&session)).unwrap();
+        let third = filtered
+            .iter()
+            .find(|summary| summary.run.id == third)
+            .unwrap();
+        assert!(third.usage.is_none());
     }
 
     #[test]

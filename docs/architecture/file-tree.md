@@ -10,6 +10,7 @@ Bollo-Harness/
 ├── .gitignore
 ├── requirements-docs.txt
 ├── .github/workflows/docs.yml
+├── .github/workflows/rust.yml
 ├── scripts/validate_docs.py
 └── docs/
     ├── README.md                      documentation atlas
@@ -59,7 +60,9 @@ Bollo-Harness/
 │   │   ├── evaluate.rs               pure deterministic decision
 │   │   ├── layers.rs                 config provenance and restrictions
 │   │   ├── normalize.rs              scoped targets and command identity
-│   │   └── approval.rs               expiring grants and exact intent hash
+│   │   ├── approval.rs               expiring grants and exact intent hash
+│   │   └── classifier.rs             advisory port, bounded projection, monotone escalation
+│   ├── bollo-classifier/src/          P2: TypeSafe/Jev adapter (opt-in live-http)
 │   ├── bollo-tools/src/
 │   │   ├── registry.rs               schema-backed discoverable tools
 │   │   ├── files.rs                  read/write/patch
@@ -71,7 +74,8 @@ Bollo-Harness/
 │   │   ├── fs.rs                     handle-relative path operations
 │   │   ├── checkpoints.rs            preimage/postimage restore guards
 │   │   ├── process.rs                child group lifecycle
-│   │   └── sandbox/                  capability probes; linux, macos, host
+│   │   ├── sandbox.rs                capability probes; linux, macos, windows, host
+│   │   └── sandbox_win.rs            Windows AppContainer backend (brokered exec/git/hooks run inside the container once workspace mode verifies)
 │   ├── bollo-providers/src/
 │   │   ├── anthropic.rs              Messages adapter
 │   │   ├── xai.rs                    Chat Completions adapter

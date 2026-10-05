@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use bollo_core::{NoChannel, RunOutcome};
+use bollo_core::{ClassifierAudit, NoChannel, RunOutcome};
 use bollo_modes::{constrain, effective};
 use bollo_policy::{evaluate, validate_startup};
 use bollo_protocol::cancel::CancellationToken;
@@ -14,7 +14,7 @@ use bollo_protocol::events::EventEnvelope;
 use bollo_protocol::ids::{CheckpointId, SessionId};
 use bollo_protocol::vocab::{ModeKind, SandboxMode};
 use bollo_protocol::{ndjson, EventType};
-use bollo_store::{CheckpointRecord, SqliteStore};
+use bollo_store::{CheckpointRecord, RunSummary, SqliteStore};
 use bollo_tui::{Presenter, SlashCommands, Terminal, TuiSession};
 use bollo_workspace::{Checkpoint, CheckpointLog, RestorePlan};
 
@@ -31,6 +31,7 @@ pub fn dispatch(cli: Cli) -> Result<i32, CliError> {
         Some(Command::Run(args)) => cmd_run(&cli, args),
         Some(Command::Resume(args)) => cmd_resume(&cli, args),
         Some(Command::Sessions(args)) => cmd_sessions(&cli, args),
+        Some(Command::Runs(args)) => cmd_runs(&cli, args),
         Some(Command::Policy(args)) => cmd_policy(&cli, args),
         Some(Command::Config(args)) => cmd_config(&cli, args),
         Some(Command::Doctor) => cmd_doctor(&cli),
@@ -86,8 +87,23 @@ fn work_mode(cli: &Cli) -> ModeKind {
     cli.mode.map(Into::into).unwrap_or(ModeKind::Build)
 }
 
+/// One-line classifier usage/audit report for stderr, or `None` when no gate
+/// was attached. Classifier activity is reporting, not an event: the NDJSON
+/// stream and the frozen event schema are untouched. Cost is unknown until a
+/// trusted classifier price source exists (OD-07); it is never zero. Kept
+/// separate from printing so the format is unit-testable.
+fn classifier_report(outcome: &RunOutcome) -> Option<String> {
+    outcome
+        .classifier
+        .attached
+        .then(|| format!("classifier {}", outcome.classifier.summary_line()))
+}
+
 fn report_outcome(outcome: &RunOutcome) {
     eprintln!("bollo: run {} {}", outcome.run_id, summarize(outcome));
+    if let Some(report) = classifier_report(outcome) {
+        eprintln!("bollo: {report}");
+    }
     eprintln!(
         "bollo: verification is reported separately from completion; inspect the \
          verification_result events"
@@ -102,6 +118,7 @@ fn cmd_run(cli: &Cli, args: &RunArgs) -> Result<i32, CliError> {
     composition.require_risk_acknowledgement()?;
     composition.ensure_provider()?;
     composition.ensure_mcp();
+    composition.ensure_sandbox()?;
     note_warnings(&composition);
     let session = composition.new_session(Some("run"))?;
     let cancel = CancellationToken::new();
@@ -141,6 +158,7 @@ fn cmd_resume(cli: &Cli, args: &ResumeArgs) -> Result<i32, CliError> {
     composition.require_risk_acknowledgement()?;
     composition.ensure_provider()?;
     composition.ensure_mcp();
+    composition.ensure_sandbox()?;
     note_warnings(&composition);
     // A stored session must exist; resuming never creates one implicitly.
     composition
@@ -267,6 +285,71 @@ fn cmd_sessions(cli: &Cli, args: &SessionsArgs) -> Result<i32, CliError> {
 fn parse_session(id: &str) -> Result<SessionId, CliError> {
     SessionId::parse(id.to_string())
         .map_err(|err| CliError::usage(format!("invalid session id {id:?}: {err}")))
+}
+
+// --- runs --------------------------------------------------------------------
+
+fn cmd_runs(cli: &Cli, args: &RunsArgs) -> Result<i32, CliError> {
+    let composition = Composition::build(cli)?;
+    match &args.command {
+        RunsCommand::List { session } => {
+            let filter = session.as_deref().map(parse_session).transpose()?;
+            let summaries = composition
+                .store
+                .list_run_summaries(filter.as_ref())
+                .map_err(|err| CliError::recovery(format!("cannot list runs: {err}")))?;
+            if summaries.is_empty() {
+                match &filter {
+                    Some(session) => println!("no runs recorded for session {session}"),
+                    None => println!("no runs recorded in {}", composition.state_dir.display()),
+                }
+                return Ok(0);
+            }
+            for summary in &summaries {
+                println!("{}", format_run_line(summary));
+            }
+            Ok(0)
+        }
+    }
+}
+
+/// One durable run record as a tab-separated line. Usage comes from the run's
+/// `usage.updated` events; the classifier audit comes from the persisted
+/// `runs.classifier_json`. Both are read from the local store only, so the
+/// record is readable without the optional API. A malformed audit is surfaced
+/// as `unreadable` rather than hidden.
+fn format_run_line(summary: &RunSummary) -> String {
+    let run = &summary.run;
+    let usage = match &summary.usage {
+        Some(usage) => format!(
+            "usage=in={} out={} cost={}",
+            usage.input_tokens,
+            usage.output_tokens,
+            usage
+                .cost_microusd
+                .map(|micro| format!("{micro}µ$"))
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+        None => "usage=-".to_string(),
+    };
+    let classifier = match run.classifier_json.as_deref() {
+        None => "-".to_string(),
+        Some(raw) => serde_json::from_str::<ClassifierAudit>(raw)
+            .map(|audit| audit.summary_line())
+            .unwrap_or_else(|_| "unreadable".to_string()),
+    };
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\tclassifier={}",
+        run.id.as_str(),
+        run.session_id.as_str(),
+        run.state,
+        run.started_at,
+        run.ended_at.as_deref().unwrap_or("-"),
+        run.provider,
+        run.model_id,
+        usage,
+        classifier
+    )
 }
 
 // --- policy ------------------------------------------------------------------
@@ -455,6 +538,7 @@ fn cmd_config(cli: &Cli, args: &ConfigArgs) -> Result<i32, CliError> {
             validate_startup(&composition.snapshot)
                 .map_err(|err| CliError::usage(format!("startup refused: {err}")))?;
             println!("snapshot       revision {} (valid)", composition.snapshot.revision);
+            println!("classifier     {}", composition.classifier_status());
             Ok(0)
         }
     }
@@ -463,19 +547,21 @@ fn cmd_config(cli: &Cli, args: &ConfigArgs) -> Result<i32, CliError> {
 fn cmd_doctor(cli: &Cli) -> Result<i32, CliError> {
     let composition = Composition::build(cli)?;
     let snapshot = &composition.snapshot;
+    let capabilities = bollo_workspace::sandbox::verified_probe();
     println!("bollo          {}", env!("CARGO_PKG_VERSION"));
     println!(
         "platform       {} ({})",
-        format!("{:?}", snapshot.capabilities.platform).to_lowercase(),
-        snapshot.capabilities.backend
+        format!("{:?}", capabilities.platform).to_lowercase(),
+        capabilities.backend
     );
     println!(
         "sandbox        filesystem_containment={} network_denied={} workspace_auto={}",
-        snapshot.capabilities.filesystem_containment,
-        snapshot.capabilities.network_denied,
-        snapshot.capabilities.supports_workspace_auto()
+        capabilities.filesystem_containment,
+        capabilities.network_denied,
+        capabilities.supports_workspace_auto()
     );
     println!("live_http      {}", cfg!(feature = "live-http"));
+    println!("classifier     {}", composition.classifier_status());
     println!("workspace      {}", composition.root.policy_root());
     println!("workspace_id   {}", composition.root.identity_hash());
     println!("state_dir      {}", composition.state_dir.display());
@@ -972,4 +1058,129 @@ impl CompositionCommands<'_> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{classifier_report, format_run_line};
+    use bollo_core::{ClassifierAudit, RunOutcome};
+    use bollo_policy::classifier::{Availability, ClassifierVerdict};
+    use bollo_protocol::ids::{RunId, SessionId};
+    use bollo_store::{RunDetail, RunSummary, RunUsage};
 
+    fn outcome(audit: ClassifierAudit) -> RunOutcome {
+        RunOutcome {
+            run_id: bollo_protocol::ids::RunId::generate(),
+            state: bollo_protocol::vocab::TerminalState::Completed,
+            reason: None,
+            verification: bollo_protocol::vocab::VerificationStatus::Skipped,
+            tool_calls: 0,
+            usage: Default::default(),
+            classifier: audit,
+            exit_code: 0,
+        }
+    }
+
+    #[test]
+    fn classifier_report_is_silent_by_default_and_audited_when_attached() {
+        assert_eq!(
+            classifier_report(&outcome(ClassifierAudit::default())),
+            None
+        );
+
+        let mut audit = ClassifierAudit {
+            attached: true,
+            ..Default::default()
+        };
+        audit.record(
+            &ClassifierVerdict::unavailable("jev-test", Availability::Timeout),
+            false,
+        );
+        assert_eq!(
+            classifier_report(&outcome(audit)).as_deref(),
+            Some("classifier 1 call · timeout 1 · cost unknown")
+        );
+    }
+
+    fn stored_run(usage: Option<RunUsage>, classifier_json: Option<&str>) -> RunSummary {
+        RunSummary {
+            run: RunDetail {
+                id: RunId::generate(),
+                session_id: SessionId::generate(),
+                state: "completed".into(),
+                policy_revision: 1,
+                model_id: "test-model".into(),
+                provider: "anthropic".into(),
+                started_at: "2026-10-04T10:00:00Z".into(),
+                ended_at: Some("2026-10-04T10:00:05Z".into()),
+                classifier_json: classifier_json.map(str::to_string),
+            },
+            usage,
+        }
+    }
+
+    #[test]
+    fn run_lines_report_persisted_usage_and_classifier_audit() {
+        let mut audit = ClassifierAudit {
+            attached: true,
+            ..Default::default()
+        };
+        audit.record(
+            &ClassifierVerdict::available("jev-test", 1.2, 0.9, 0.0),
+            true,
+        );
+        audit.record(
+            &ClassifierVerdict::unavailable("jev-test", Availability::Timeout),
+            false,
+        );
+        let json = serde_json::to_string(&audit).unwrap();
+        let summary = stored_run(
+            Some(RunUsage {
+                input_tokens: 150,
+                output_tokens: 15,
+                cost_microusd: Some(675),
+                cost_known: true,
+            }),
+            Some(&json),
+        );
+
+        let line = format_run_line(&summary);
+        let columns: Vec<&str> = line.split('\t').collect();
+        assert_eq!(columns.len(), 9, "{line}");
+        assert_eq!(columns[0], summary.run.id.as_str());
+        assert_eq!(columns[1], summary.run.session_id.as_str());
+        assert_eq!(columns[2], "completed");
+        assert_eq!(columns[3], "2026-10-04T10:00:00Z");
+        assert_eq!(columns[4], "2026-10-04T10:00:05Z");
+        assert_eq!(columns[5], "anthropic");
+        assert_eq!(columns[6], "test-model");
+        assert_eq!(columns[7], "usage=in=150 out=15 cost=675µ$");
+        assert_eq!(
+            columns[8],
+            "classifier=2 calls · available 1, timeout 1 · 1 escalated · cost unknown"
+        );
+    }
+
+    #[test]
+    fn run_lines_mark_missing_usage_unknown_cost_and_no_classifier() {
+        let line = format_run_line(&stored_run(
+            Some(RunUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_microusd: None,
+                cost_known: false,
+            }),
+            None,
+        ));
+        assert!(line.contains("usage=in=0 out=0 cost=unknown"), "{line}");
+        assert!(line.contains("classifier=-"), "{line}");
+
+        // No model response was recorded at all: `-`, not a zero figure.
+        let line = format_run_line(&stored_run(None, None));
+        assert!(line.contains("usage=-"), "{line}");
+    }
+
+    #[test]
+    fn run_lines_surface_unreadable_classifier_json() {
+        let line = format_run_line(&stored_run(None, Some("{not json")));
+        assert!(line.contains("classifier=unreadable"), "{line}");
+    }
+}

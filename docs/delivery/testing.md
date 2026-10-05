@@ -58,7 +58,7 @@ Requirement BH-005 · phase MVP · component `bollo-policy`.
 
 Requirement BH-006 · phase MVP · component `bollo-workspace`.
 
-**Pass:** Probe filesystem and tool-network containment; refuse workspace_auto when required enforcement is absent; never silently run on host.
+**Pass:** Probe filesystem and tool-network containment; refuse workspace_auto when required enforcement is absent; never silently run on host. A contained `cargo`/`rustc` run reads the host toolchain and package caches through the capability grants while credential stores stay outside every grant (a store inside a would-be granted tree refuses the run).
 
 ### AT-007 — Scoped approvals
 
@@ -144,6 +144,12 @@ Requirement BH-020 · phase P3 · component `bollo-core`.
 
 **Pass:** Child cannot exceed parent capability or budget; cancellation propagates; read-only scope cannot mutate through shell or MCP.
 
+### AT-021 — Advisory risk classifier
+
+Requirement BH-021 · phase P2 · component `bollo-policy`.
+
+**Pass:** Escalate only: classifier hints turn allow into ask at most and never grant, widen or deny; disabled, failing, malformed or untrusted responses leave the policy decision unchanged; deny/ask, read-only effects and unselected profiles produce zero calls.
+
 ## Critical negative scenarios
 
 - Approve then modify target/argv/policy/executable; no effect under stale receipt.
@@ -162,6 +168,8 @@ Requirement BH-020 · phase P3 · component `bollo-core`.
 - Concurrent same-workspace writers: lock conflict; independent sessions preserve isolation.
 - Provider changes price/omits usage: unknown cost displayed; cap cannot silently disappear.
 - Session deletion does not remove shared artifact references or source files.
+- Classifier hint says allow/deny or times out: effective decision is never less strict than policy;
+  a malformed or attacker-shaped verdict cannot authorize, widen, or suppress an approval.
 
 ## Release quality bar
 

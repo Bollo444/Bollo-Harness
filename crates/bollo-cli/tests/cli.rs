@@ -81,6 +81,16 @@ impl Fixture {
         self
     }
 
+    /// Replace the classifier block in the trusted configuration, keeping the
+    /// rest of the fixture config intact.
+    fn set_classifier(&self, block: &str) -> &Self {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&self.config).unwrap()).unwrap();
+        value["classifier"] = serde_json::from_str(block).unwrap();
+        std::fs::write(&self.config, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        self
+    }
+
     fn base_args(&self) -> Vec<String> {
         vec![
             "--workspace".into(),
@@ -194,7 +204,10 @@ fn headless_ndjson_stdout_is_machine_only() {
             serde_json::from_str(line).unwrap_or_else(|err| panic!("not an event: {err}: {line}"));
         assert_eq!(event.schema_version, "0.1");
     }
-    assert!(!stdout(&output).contains('\u{1b}'), "no ANSI escapes on stdout");
+    assert!(
+        !stdout(&output).contains('\u{1b}'),
+        "no ANSI escapes on stdout"
+    );
     assert!(
         stderr(&output).contains("verification is reported separately"),
         "diagnostics belong on stderr"
@@ -240,8 +253,18 @@ fn policy_show_and_explain_are_read_only() {
         r#"{"tool": "write_file", "arguments": {"path": "x.txt", "content": "y", "expected_sha256": null}}"#,
     )
     .unwrap();
-    let explain = fixture.output(&["policy", "explain", "--intent", &intent.display().to_string()]);
-    assert_eq!(explain.status.code(), Some(0), "stderr: {}", stderr(&explain));
+    let explain = fixture.output(&[
+        "policy",
+        "explain",
+        "--intent",
+        &intent.display().to_string(),
+    ]);
+    assert_eq!(
+        explain.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&explain)
+    );
     let text = stdout(&explain);
     assert!(text.contains("policy_effect  ask"), "{text}");
     assert!(text.contains("mode           build → ask"), "{text}");
@@ -252,9 +275,7 @@ fn policy_show_and_explain_are_read_only() {
 #[test]
 fn sessions_list_export_and_delete() {
     let fixture = Fixture::new();
-    fixture.write_script(
-        r#"[{"deltas": ["hello\n"], "finish": "end_turn"}]"#,
-    );
+    fixture.write_script(r#"[{"deltas": ["hello\n"], "finish": "end_turn"}]"#);
     let run = fixture.run_replay(&[], "ndjson");
     assert_eq!(run.status.code(), Some(0));
 
@@ -277,7 +298,12 @@ fn sessions_list_export_and_delete() {
         "--output",
         &export.display().to_string(),
     ]);
-    assert_eq!(export_out.status.code(), Some(0), "stderr: {}", stderr(&export_out));
+    assert_eq!(
+        export_out.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&export_out)
+    );
     let exported = std::fs::read_to_string(&export).unwrap();
     assert!(exported.lines().count() >= 3);
     for line in exported.lines() {
@@ -296,7 +322,12 @@ fn sessions_list_export_and_delete() {
 fn config_validate_and_doctor_report_facts() {
     let fixture = Fixture::new();
     let validate = fixture.output(&["config", "validate"]);
-    assert_eq!(validate.status.code(), Some(0), "stderr: {}", stderr(&validate));
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&validate)
+    );
     assert!(stdout(&validate).contains("snapshot       revision 1 (valid)"));
 
     let doctor = fixture.output(&["doctor"]);
@@ -304,9 +335,159 @@ fn config_validate_and_doctor_report_facts() {
     let text = stdout(&doctor);
     assert!(text.contains("workspace"));
     assert!(text.contains("sandbox"));
-    assert!(text.contains("store          schema_version=2"));
+    assert!(text.contains("store          schema_version=4"));
     assert!(text.contains("credential_env=ANTHROPIC_API_KEY present="));
     assert!(text.contains("no project code was executed"));
+}
+
+#[test]
+fn classifier_is_disabled_by_default_and_strict_when_present() {
+    let fixture = Fixture::new();
+    let validate = fixture.output(&["config", "validate"]);
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&validate)
+    );
+    assert!(stdout(&validate).contains("classifier     disabled (zero calls)"));
+
+    // A minimal disabled block changes nothing: still zero calls.
+    fixture.set_classifier(r#"{"enabled": false}"#);
+    let validate = fixture.output(&["config", "validate"]);
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&validate)
+    );
+    assert!(stdout(&validate).contains("classifier     disabled (zero calls)"));
+
+    // Unsafe shapes are rejected by the strict parser before anything runs.
+    for block in [
+        r#"{"enabled": true, "origin": "http://api.typesafe.ai"}"#,
+        r#"{"enabled": true, "origin": "https://api.typesafe.ai/v1"}"#,
+        r#"{"enabled": true, "credential_env": "sk-live-secret-value"}"#,
+        r#"{"enabled": true, "timeout_ms": 50}"#,
+        r#"{"enabled": true, "profiles": []}"#,
+    ] {
+        fixture.set_classifier(block);
+        let output = fixture.output(&["config", "validate"]);
+        assert_eq!(output.status.code(), Some(2), "block {block} was accepted");
+        assert!(
+            stderr(&output).contains("invalid configuration"),
+            "{block}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn classifier_enabled_reports_posture_and_never_blocks_a_turn() {
+    let fixture = Fixture::new();
+    fixture.set_classifier(
+        r#"{"enabled": true, "origin": "https://api.typesafe.ai", "model": "jev-1.13.0",
+            "credential_env": "TYPESAFE_API_KEY", "timeout_ms": 1500, "escalate_at": 1.0,
+            "min_confidence": 0.5, "credential_threshold": 0.9, "profiles": ["balanced"]}"#,
+    );
+    let validate = fixture.output(&["config", "validate"]);
+    assert_eq!(
+        validate.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&validate)
+    );
+    let text = stdout(&validate);
+    if cfg!(feature = "live-http") {
+        assert!(
+            text.contains("classifier     attached (model jev-1.13.0; profiles balanced"),
+            "{text}"
+        );
+    } else {
+        assert!(
+            text.contains("classifier     enabled in config but detached"),
+            "{text}"
+        );
+    }
+
+    // The advisory classifier is fail-neutral and cannot block a turn; without
+    // the live transport no classifier call is possible at all.
+    fixture.write_script(r#"[{"deltas": ["ok\n"], "finish": "end_turn"}]"#);
+    let run = fixture.run_replay(&[], "ndjson");
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr(&run));
+    assert!(
+        stderr(&run).contains("classifier"),
+        "missing classifier posture: {}",
+        stderr(&run)
+    );
+}
+
+#[test]
+fn runs_list_reports_usage_and_classifier_audit_without_the_api() {
+    let fixture = Fixture::new();
+    fixture.write_script(
+        r#"[
+            {"deltas": [], "tool_calls": [{"call_id": "c1", "name": "read_file", "arguments": {"path": "hello.txt"}}], "finish": "tool_use", "input_tokens": 100, "output_tokens": 10},
+            {"deltas": ["done\n"], "finish": "end_turn", "input_tokens": 50, "output_tokens": 5}
+        ]"#,
+    );
+    let run = fixture.run_replay(&[], "ndjson");
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr(&run));
+
+    let database = fixture.state.join("state.sqlite3");
+    let (session, run_id) = {
+        let store = SqliteStore::open(&database).unwrap();
+        let summaries = store.list_run_summaries(None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        (
+            summaries[0].run.session_id.clone(),
+            summaries[0].run.id.clone(),
+        )
+    };
+
+    // Plant the audit exactly as a live classifier run persists it (the default
+    // test build has no live transport, so no gate can attach on its own).
+    {
+        let mut store = SqliteStore::open(&database).unwrap();
+        store
+            .record_classifier_audit(
+                &run_id,
+                r#"{"attached":true,"calls":2,"availability":{"available":1,"timeout":1},"escalations":1,"cost_known":false,"cost_microusd":null}"#,
+            )
+            .unwrap();
+    }
+
+    let listed = fixture.output(&["runs", "list"]);
+    assert_eq!(listed.status.code(), Some(0), "stderr: {}", stderr(&listed));
+    let text = stdout(&listed);
+    for expected in [
+        run_id.as_str(),
+        session.as_str(),
+        "completed",
+        "usage=in=150 out=15 cost=675µ$",
+        "classifier=2 calls · available 1, timeout 1 · 1 escalated · cost unknown",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+
+    let filtered = fixture.output(&["runs", "list", "--session", session.as_str()]);
+    assert_eq!(
+        filtered.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&filtered)
+    );
+    assert!(stdout(&filtered).contains(run_id.as_str()));
+
+    let absent = SessionId::generate();
+    let empty = fixture.output(&["runs", "list", "--session", absent.as_str()]);
+    assert_eq!(empty.status.code(), Some(0), "stderr: {}", stderr(&empty));
+    assert!(stdout(&empty).contains("no runs recorded for session"));
+
+    // Read-only: listing creates neither sessions nor runs.
+    let store = SqliteStore::open(&database).unwrap();
+    assert_eq!(store.list_sessions().unwrap().len(), 1);
+    assert_eq!(store.list_run_summaries(None).unwrap().len(), 1);
 }
 
 #[test]
@@ -383,7 +564,12 @@ fn checkpoints_preview_and_refuse_user_edits() {
         "unrestricted",
         "--acknowledge-risk",
     ]);
-    assert_eq!(refused.status.code(), Some(5), "stderr: {}", stderr(&refused));
+    assert_eq!(
+        refused.status.code(),
+        Some(5),
+        "stderr: {}",
+        stderr(&refused)
+    );
     assert!(stderr(&refused).contains("refusing to delete user content"));
     assert_eq!(
         std::fs::read_to_string(fixture.workspace.join("notes.txt")).unwrap(),
@@ -401,23 +587,89 @@ fn checkpoints_preview_and_refuse_user_edits() {
         "unrestricted",
         "--acknowledge-risk",
     ]);
-    assert_eq!(restored.status.code(), Some(0), "stderr: {}", stderr(&restored));
+    assert_eq!(
+        restored.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&restored)
+    );
     assert!(!fixture.workspace.join("notes.txt").exists());
 }
 
 #[cfg(windows)]
 #[test]
-fn workspace_sandbox_is_refused_without_enforcement() {
+fn workspace_sandbox_is_verified_or_refused_but_never_host_fallback() {
     let fixture = Fixture::new();
-    // No --sandbox off: the probe on this host reports no containment, so
-    // startup must refuse rather than silently run on the host.
+    // No --sandbox off: startup must either verify containment with an executed
+    // check or refuse. It must never quietly run workspace mode on the host.
     let config = std::fs::read_to_string(&fixture.config)
         .unwrap()
         .replace(r#""sandbox": "off""#, r#""sandbox": "workspace""#);
     std::fs::write(&fixture.config, config).unwrap();
     let output = fixture.output(&["doctor"]);
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("filesystem containment is unavailable"));
+    let text = stdout(&output);
+    let diagnostics = stderr(&output);
+    match output.status.code() {
+        Some(0) => {
+            assert!(
+                text.contains(
+                    "filesystem_containment=true network_denied=true workspace_auto=true"
+                ),
+                "stdout: {text}"
+            );
+            assert!(text.contains("Windows AppContainer"), "stdout: {text}");
+        }
+        Some(2) => {
+            assert!(
+                diagnostics.contains("filesystem containment is unavailable"),
+                "stderr: {diagnostics}"
+            );
+        }
+        other => panic!("unexpected exit {other:?}: stdout: {text}; stderr: {diagnostics}"),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn workspace_mode_runs_exec_children_inside_the_container() {
+    let fixture = Fixture::new();
+    let config = std::fs::read_to_string(&fixture.config)
+        .unwrap()
+        .replace(r#""sandbox": "off""#, r#""sandbox": "workspace""#);
+    std::fs::write(&fixture.config, config).unwrap();
+    // Only a host that verified containment can run this scenario; the doctor
+    // test above pins the refusal contract when verification is unavailable.
+    if fixture.output(&["doctor"]).status.code() != Some(0) {
+        eprintln!("containment unavailable on this host; skipping the contained run");
+        return;
+    }
+    // The child writes inside the workspace through the granted container
+    // access; the file is the observable proof it ran under containment.
+    fixture.write_script(
+        r#"[
+            {"deltas": [], "tool_calls": [{"call_id": "x1", "name": "exec", "arguments": {"argv": ["cmd", "/C", "echo contained-ok > contained.txt"], "cwd": ".", "timeout_seconds": 20}}], "finish": "tool_use"},
+            {"deltas": ["done\n"], "finish": "end_turn"}
+        ]"#,
+    );
+    let script = fixture.script_arg();
+    let run = fixture.output(&[
+        "run",
+        "--profile",
+        "unrestricted",
+        "--acknowledge-risk",
+        "--provider",
+        "replay",
+        "--script",
+        &script,
+        "--prompt",
+        "run the child",
+        "--output",
+        "ndjson",
+    ]);
+    assert_eq!(run.status.code(), Some(0), "stderr: {}", stderr(&run));
+    let written = std::fs::read_to_string(fixture.workspace.join("contained.txt"))
+        .expect("the contained child wrote its output into the workspace");
+    assert!(written.contains("contained-ok"), "file: {written}");
 }
 
 #[test]
@@ -430,7 +682,9 @@ fn resume_refuses_unknown_operations_without_acknowledgement() {
         let mut store = SqliteStore::open(&database).unwrap();
         let identity = fixture.workspace.display().to_string();
         let session = store.create_session(&identity, Some("crash")).unwrap();
-        let run = store.start_run(&session, "anthropic", "test-model", 1).unwrap();
+        let run = store
+            .start_run(&session, "anthropic", "test-model", 1)
+            .unwrap();
         store
             .record_operation_intent(&run, "call_crashed", "exec", &"a".repeat(64))
             .unwrap();
@@ -452,7 +706,12 @@ fn resume_refuses_unknown_operations_without_acknowledgement() {
         "--prompt",
         "continue",
     ]);
-    assert_eq!(refused.status.code(), Some(5), "stderr: {}", stderr(&refused));
+    assert_eq!(
+        refused.status.code(),
+        Some(5),
+        "stderr: {}",
+        stderr(&refused)
+    );
     assert!(stderr(&refused).contains("never replayed"));
 
     let accepted = fixture.output(&[
@@ -471,7 +730,12 @@ fn resume_refuses_unknown_operations_without_acknowledgement() {
         "--output",
         "ndjson",
     ]);
-    assert_eq!(accepted.status.code(), Some(0), "stderr: {}", stderr(&accepted));
+    assert_eq!(
+        accepted.status.code(),
+        Some(0),
+        "stderr: {}",
+        stderr(&accepted)
+    );
 
     // The unknown operation is untouched: still exactly one, still unknown.
     let store = SqliteStore::open(&database).unwrap();
@@ -506,7 +770,12 @@ fn nonexistent_session_resume_is_exit_5() {
 /// Paths in a fixture stay inside the temporary root.
 #[allow(dead_code)]
 fn assert_inside(root: &Path, path: &Path) {
-    assert!(path.starts_with(root), "{} escaped {}", path.display(), root.display());
+    assert!(
+        path.starts_with(root),
+        "{} escaped {}",
+        path.display(),
+        root.display()
+    );
 }
 
 /// The interactive client is terminal-independent by design (input and output
@@ -574,7 +843,10 @@ fn interactive_session_drives_the_real_runtime() {
     assert_eq!(code, 0);
     let transcript = tui.transcript().joined();
     assert!(transcript.contains("the repo is small"), "{transcript}");
-    assert!(transcript.contains("run finished: completed"), "{transcript}");
+    assert!(
+        transcript.contains("run finished: completed"),
+        "{transcript}"
+    );
 
     // The interactive turn is durably journalled like any other run.
     let store = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();

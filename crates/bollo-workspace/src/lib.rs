@@ -9,12 +9,14 @@ pub mod fs;
 pub mod process;
 pub mod root;
 pub mod sandbox;
+#[cfg(windows)]
+pub mod sandbox_win;
 
 pub use checkpoints::{Checkpoint, CheckpointLog, RestorePlan};
 pub use fs::{FilePatch, FileRead, FileWrite, WorkspaceFs};
-pub use process::{run, ExecOutcome, ExecRequest, ExecStatus};
+pub use process::{run, ChildSandbox, ExecOutcome, ExecRequest, ExecStatus};
 pub use root::WorkspaceRoot;
-pub use sandbox::probe;
+pub use sandbox::{create_workspace_sandbox, probe, verified_probe};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum WsError {

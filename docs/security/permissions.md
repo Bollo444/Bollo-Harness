@@ -119,8 +119,24 @@ in host mode. Revocation stops future dispatch; it cannot undo already-running e
 |---|---|---|
 | Linux | verified root mounts/path containment, process restriction, tool network denial, protected host state | refuse workspace_auto; explain diagnostic |
 | macOS | independently tested equivalent boundaries, including tool network denial | beta supports read/host workflows only; no silent equivalent label |
-| Native Windows | not in MVP enforcement support | explain unsupported; don't pretend WSL guarantees apply natively |
+| Native Windows | AppContainer enforced: startup runs an executed check (`bollo doctor` shows the evidence — writes outside granted roots denied; outbound network including loopback denied) and the broker launches every `exec`/`git`/hook child inside the container | refuse `workspace_auto` when the check fails or the container cannot be created; report the measured evidence; don't pretend WSL guarantees apply natively |
 | Host/off | no isolation guarantee | explicit consent; not eligible for workspace_auto |
+
+The Windows backend carries its grants on stable derived capability SIDs: a
+host-wide toolchain capability with read+execute on the rustup home and the
+cargo `bin`/`registry`/`git` trees (`config.toml` is granted as a single file),
+and a per-workspace capability with modify on that workspace's canonical root.
+Each granted root takes one inheritable ACE; Windows propagates it to the
+existing tree and inheritance covers later additions. Credential stores
+(`~/.cargo/credentials.toml` and the legacy `credentials`) are never inside a
+granted root — the cargo home itself is deliberately not a grant root — and a
+run whose workspace or toolchain grant would contain a store is refused rather
+than granted. Two measured limits belong to this boundary: capability SIDs
+receive access through allow ACEs only (a deny ACE does not override an
+inherited allow), and objects with protected DACLs accept no inherited ACEs.
+`config.toml` is readable to contained children, so a registry token stored
+there (deprecated cargo practice) should move to `credentials.toml`, which is
+never granted.
 
 Backend choice (e.g. Linux namespaces/bubblewrap with appropriate kernel controls) is
 an architecture spike, not already implemented. Sensitive paths must be inaccessible

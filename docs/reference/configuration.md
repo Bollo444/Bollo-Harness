@@ -38,6 +38,19 @@ permissions. Invalid constraints stop startup; they are not skipped with a warni
 | privacy.content_retention_days | 30 | Inactive transcript/artifact pruning policy |
 | mcp_servers | array, empty default | stdio command/args/env-name allowlist; enabled alone is not trust |
 | hooks | array, empty default | before_tool/after_tool argv; 1–30 second deadline |
+| classifier.enabled | false default | Opt-in advisory escalation; disabled means zero calls and zero egress |
+| classifier.origin | exact HTTPS origin, default `https://api.typesafe.ai` | Credential binding only; no path, query, userinfo or redirects |
+| classifier.model | pinned model ID, default `jev-1.13.0` | Question/answer model, never the agent model |
+| classifier.credential_env | `TYPESAFE_API_KEY` default | Environment variable name; never a raw secret, never inherited by children |
+| classifier.timeout_ms | 1500, allowed 100–10000 | Advisory deadline; timeout is neutral, never a denial |
+| classifier.escalate_at / min_confidence / credential_threshold | 1.0 / 0.5 / 0.9, each 0–1 | allow→ask escalation thresholds; can never deny |
+| classifier.profiles | balanced, workspace_auto | Profiles where escalation is active; unrestricted requires explicit opt-in |
+
+The classifier block is optional and strict: it is parsed only from trusted user
+configuration (project configuration rejects it), its origin, credential name,
+timeout and thresholds are validated even while `enabled` is false, and enabling it
+in a build without `live-http` leaves the gate detached with a startup diagnostic —
+no classifier call is possible.
 
 The example intentionally contains no fabricated model prices. A finite spend cap
 requires a trusted current price table at runtime; until supplied, requests block with
@@ -64,7 +77,10 @@ Require HTTPS for remote providers; normalize base origin and reject embedded us
 password, fragment or unexpected path/query. Do not let model/project set localhost or
 private service endpoints. Custom local-model support is deferred to a reviewed opt-in.
 Verify actual model capabilities and sandbox availability. Reject dangerous duplicate
-rule IDs and untrusted enabled hooks/MCP. For unrestricted/off require trusted run-time
+rule IDs and untrusted enabled hooks/MCP. Classifier origin and credential follow the
+same origin rules: the exact HTTPS origin comes from trusted config only, the credential
+is bound to that origin and never passed to children
+([classifier design](../reference/classifier.md)). For unrestricted/off require trusted run-time
 risk acknowledgement (not a persistable `ack=true` project field). These checks need
 runtime tests; passing schema validation alone is not proof of secure configuration.
 

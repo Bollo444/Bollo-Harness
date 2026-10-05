@@ -66,7 +66,10 @@ impl Default for UreqTransport {
 #[cfg(feature = "live-http")]
 impl Transport for UreqTransport {
     fn post(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
-        let mut builder = self.agent.post(&request.url);
+        // The per-request deadline is part of the request contract: the
+        // classifier's 1500 ms advisory bound and provider deadlines must be
+        // real, not just recorded.
+        let mut builder = self.agent.post(&request.url).timeout(request.timeout);
         for (key, value) in &request.headers {
             builder = builder.set(key, value);
         }

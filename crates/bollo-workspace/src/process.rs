@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -44,7 +44,7 @@ impl ExecOutcome {
         self.status == ExecStatus::Exited && self.exit_code == Some(0)
     }
 
-    fn failed_to_start(message: String) -> Self {
+    pub(crate) fn failed_to_start(message: String) -> Self {
         Self {
             status: ExecStatus::FailedToStart,
             exit_code: None,
@@ -91,8 +91,40 @@ pub fn base_environment() -> BTreeMap<String, String> {
     env
 }
 
+/// A containment backend that runs brokered children under enforced
+/// sandboxing (see `sandbox_win`). The host broker ([`run`]) remains the
+/// default; a sandbox backend must preserve the same outcome semantics.
+pub trait ChildSandbox {
+    /// Run a brokered child under enforced containment. Semantics must match
+    /// [`run_with_stdin`]; only the isolation differs.
+    fn run_with_stdin(&self, request: &ExecRequest, stdin_bytes: Option<&[u8]>) -> ExecOutcome;
+
+    fn run(&self, request: &ExecRequest) -> ExecOutcome {
+        self.run_with_stdin(request, None)
+    }
+}
+
 pub fn run(request: &ExecRequest) -> ExecOutcome {
     run_with_stdin(request, None)
+}
+
+/// Convert a resolved path to the form a child process can actually use as a
+/// current directory. `std::fs::canonicalize` returns verbatim paths
+/// (`\\?\C:\...`) on Windows; most programs do not understand that prefix, and
+/// cmd treats it as an unsupported UNC path, silently falling back to the
+/// Windows directory. The path is unchanged on other platforms.
+pub fn filesystem_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Like [`run`] but writes bounded bytes to the child's stdin first (used by
@@ -106,7 +138,7 @@ pub fn run_with_stdin(request: &ExecRequest, stdin_bytes: Option<&[u8]>) -> Exec
     let mut command = Command::new(&request.argv[0]);
     command
         .args(&request.argv[1..])
-        .current_dir(&request.cwd)
+        .current_dir(filesystem_path(&request.cwd))
         .stdin(if stdin_bytes.is_some() {
             Stdio::piped()
         } else {
@@ -209,7 +241,7 @@ pub fn run_with_stdin(request: &ExecRequest, stdin_bytes: Option<&[u8]>) -> Exec
     }
 }
 
-fn drain(mut reader: impl Read, cap: u64) -> (String, bool) {
+pub(crate) fn drain(mut reader: impl Read, cap: u64) -> (String, bool) {
     let mut buffer: Vec<u8> = Vec::new();
     let mut truncated = false;
     let mut chunk = [0u8; 8192];
@@ -290,6 +322,19 @@ mod tests {
         let outcome = run(&req);
         assert!(outcome.truncated);
         assert!(outcome.stdout.len() <= 256);
+    }
+
+    #[test]
+    fn filesystem_path_strips_the_windows_verbatim_prefix() {
+        #[cfg(windows)]
+        {
+            let verbatim = Path::new(r"\\?\C:\work\project");
+            assert_eq!(filesystem_path(verbatim), PathBuf::from(r"C:\work\project"));
+            let unc = Path::new(r"\\?\UNC\server\share\project");
+            assert_eq!(filesystem_path(unc), PathBuf::from(r"\\server\share\project"));
+        }
+        let plain = Path::new("/work/project");
+        assert_eq!(filesystem_path(plain), PathBuf::from("/work/project"));
     }
 
     #[test]

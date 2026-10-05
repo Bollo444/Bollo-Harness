@@ -1,6 +1,6 @@
 # System design and component contracts
 
-PROPOSAL · ADR-001/002/003 · requirements BH-001…BH-020.
+PROPOSAL · ADR-001/002/003 · requirements BH-001…BH-021.
 [Diagrams](diagrams.md) · [file tree](file-tree.md) · [runtime](runtime.md).
 
 ## Context boundary
@@ -18,7 +18,8 @@ obtains any required approval. User credentials stay in the provider adapter's s
 | `bollo-tui` | rendering, keyboard input, approvals UI | mutate policy/store directly | commands in / events out |
 | `bollo-core` | sessions, runs, scheduling, cancellation, context | know terminal layout or provider wire formats | `Provider`, `ToolExecutor`, `EventStore` |
 | `bollo-protocol` | shared IDs, DTOs, event/error contracts | filesystem, HTTP or process side effects | serializable types |
-| `bollo-policy` | pure allow/ask/deny + reason/provenance | spawn processes or ask the user | `evaluate(ToolIntent, PolicySnapshot)` |
+| `bollo-policy` | pure allow/ask/deny + reason/provenance | spawn processes or ask the user | `evaluate(ToolIntent, PolicySnapshot)`; advisory classifier port + monotone escalation |
+| `bollo-classifier` (P2) | TypeSafe/Jev scoring adapter over the shared transport | authorize, deny or hold policy state | `classify(ClassifierState)` |
 | `bollo-tools` | typed implementations and normalized effect descriptions | bypass authorization token | `prepare` / `execute` |
 | `bollo-workspace` | rooted files, preimages, hashes, sandbox exec | change policy or credentials | `WorkspaceFs`, `ExecBackend` |
 | `bollo-providers` | transport/auth/retries/capability mapping | tool execution or automatic vendor fallback | `stream(ModelRequest)` |

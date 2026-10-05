@@ -49,6 +49,7 @@ fn before(scenario: &str, timeout_seconds: u32) -> HookOutcome {
         &cwd,
         &trust,
         &CancellationToken::new(),
+        None,
     )
 }
 
@@ -84,6 +85,7 @@ fn payload_is_delivered_on_stdin() {
         &payload(HookEvent::AfterTool, Some("succeeded")),
         &cwd,
         &trust,
+        None,
     ) {
         HookOutcome::Recorded { ok, note } => {
             assert!(ok);
@@ -104,6 +106,7 @@ fn after_hook_failure_cannot_rewrite_the_result() {
         &payload(HookEvent::AfterTool, Some("succeeded")),
         &cwd,
         &trust,
+        None,
     ) {
         HookOutcome::Recorded { ok, note } => {
             assert!(!ok);

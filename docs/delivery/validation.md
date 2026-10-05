@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/python scripts/validate_docs.py
 ```
 
-The GitHub Actions workflow runs the same validation on pushes/pull requests. Workflow
+The GitHub Actions documentation workflow runs the same validation on pushes/pull requests. Workflow
 configuration is present; a remote CI run is not claimed until actually observed.
 
 Checks performed:
@@ -69,10 +69,10 @@ not prove semantic consistency of every prose sentence.
 A gap being documented is not a reason to call it implemented. Track closure with the
 backlog and record concrete evidence at the corresponding phase gate.
 
-## Observed checks on 2026-10-03
+## Observed checks on 2026-10-04
 
-- The Python documentation validator passed on this baseline: 40 Markdown documents,
-  5 standalone JSON Schemas, 13 proposed OpenAPI operations, 20 requirements, 7 example
+- The Python documentation validator passed on this baseline: 42 Markdown documents,
+  5 standalone JSON Schemas, 13 proposed OpenAPI operations, 21 requirements, 7 example
   NDJSON events, 15 policy-case fixtures, and 4,662 inventoried upstream paths.
 - All 11 Mermaid blocks passed an additional one-time grammar parse using Mermaid
   11.12.0 with jsdom 26.1.0 in an excluded research cache. This was a syntax check,

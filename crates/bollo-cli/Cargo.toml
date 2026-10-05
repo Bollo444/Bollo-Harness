@@ -15,13 +15,16 @@ path = "src/bin/mcp_fixture.rs"
 
 [features]
 default = []
-# Opt-in live HTTPS transport for the anthropic/xai adapters. Tests never need
-# it: the deterministic `replay` provider drives the whole loop offline.
-live-http = ["bollo-providers/live-http"]
+# Opt-in live HTTPS transport for the anthropic/xai adapters and the BH-021
+# advisory classifier. Tests never need it: the deterministic `replay`
+# provider drives the whole loop offline, and the default build has no
+# classifier transport, so `classifier.enabled` alone cannot emit traffic.
+live-http = ["bollo-providers/live-http", "bollo-classifier/live-http"]
 
 [dependencies]
 bollo-protocol = { path = "../bollo-protocol" }
 bollo-policy = { path = "../bollo-policy" }
+bollo-classifier = { path = "../bollo-classifier" }
 bollo-workspace = { path = "../bollo-workspace" }
 bollo-tools = { path = "../bollo-tools" }
 bollo-store = { path = "../bollo-store" }

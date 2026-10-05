@@ -221,6 +221,17 @@
       "acceptance_test": "AT-020",
       "acceptance": "Child cannot exceed parent capability or budget; cancellation propagates; read-only scope cannot mutate through shell or MCP.",
       "implementation_status": "not_implemented"
+    },
+    {
+      "id": "BH-021",
+      "title": "Advisory risk classifier",
+      "phase": "P2",
+      "priority": "planned",
+      "component": "bollo-policy",
+      "spec": "reference/classifier.md",
+      "acceptance_test": "AT-021",
+      "acceptance": "Escalate only: classifier hints turn allow into ask at most and never grant, widen or deny; disabled, failing, malformed or untrusted responses leave the policy decision unchanged; deny/ask, read-only effects and unselected profiles produce zero calls.",
+      "implementation_status": "not_implemented"
     }
   ]
 }

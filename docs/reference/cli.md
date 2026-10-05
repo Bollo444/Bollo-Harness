@@ -12,6 +12,7 @@ BH-001/011/012. All examples are future commands. **No `bollo` binary exists in 
 | `bollo sessions list` | Local session metadata | No |
 | `bollo sessions export ID --output PATH` | Redacted export preview/confirmation | Writes chosen export only |
 | `bollo sessions delete ID` | Explicit session/content deletion | Deletes local state, not source |
+| `bollo runs list [--session ID]` | Durable run records: state, usage and classifier audit without the API | No |
 | `bollo policy show` | Effective values/rules and their origins | No |
 | `bollo policy explain --intent FILE` | Evaluate example intent without executing | No |
 | `bollo config validate` | Syntax/semantic config checks | No |
@@ -19,6 +20,13 @@ BH-001/011/012. All examples are future commands. **No `bollo` binary exists in 
 | `bollo mcp list` | Configured servers, trust, status | No server auto-start |
 | `bollo checkpoint preview ID` | Compare preimage/postimage/current | No |
 | `bollo checkpoint restore ID` | Conditional restore with preview/approval | Yes, only hash-matching files |
+
+`bollo runs list` reads the local store only: one line per run, newest first, with the
+run and session ids, terminal state, timestamps, provider/model, aggregated token usage
+(cost is known or explicitly unknown, never silently zero) and the persisted classifier
+audit — `-` when no gate was attached. `--session ID` narrows the listing. The command
+opens no socket and does not need the optional API.
+
 
 ## Shared flags
 
@@ -44,8 +52,10 @@ bollo run --profile unrestricted --sandbox off --acknowledge-risk   --prompt-fil
 
 No interactive prompt is possible. An ask decision blocks the run with
 `approval_required` and exit 3. It never defaults to yes. Stdout contains only selected
-output format, stderr contains diagnostics, never provider secrets. NDJSON uses the
-[event envelope](events.md); every line is standalone UTF-8 JSON. Ctrl-C maps to exit
+output format, stderr contains diagnostics, never provider secrets. When an advisory
+classifier is attached, stderr also reports its per-run activity (call count, availability,
+unknown cost); the classifier never becomes an event, so NDJSON stdout stays unchanged.
+NDJSON uses the [event envelope](events.md); every line is standalone UTF-8 JSON. Ctrl-C maps to exit
 130 after best-effort cleanup. Broken output pipes cancel local scheduling rather than
 silently leave unobserved mutation running.
 

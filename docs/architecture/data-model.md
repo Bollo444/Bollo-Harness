@@ -13,7 +13,7 @@ use owner-only permissions; neither filesystem permissions nor redaction equal e
 |---|---|---|
 | workspaces | id, canonical_root, identity_hash, trusted_at | unique current identity |
 | sessions | id, workspace_id, created_at, last_seq, label | FK workspace; monotonic last_seq |
-| runs | id, session_id, state, config_hash, policy_revision, model_id, started_at, ended_at | one active per session |
+| runs | id, session_id, state, config_hash, policy_revision, model_id, started_at, ended_at, classifier_json | one active per session; classifier audit counters are nullable |
 | messages | id, session_id, run_id, role, content_ref, provider_scope | no cross-provider opaque blocks |
 | events | session_id, seq, event_id, type, payload_json, timestamp | PK(session_id, seq); unique event_id |
 | operations | id, run_id, tool_name, intent_hash, state, result_ref | immutable intent; unknown state supported |
@@ -24,6 +24,11 @@ use owner-only permissions; neither filesystem permissions nor redaction equal e
 | trust_records | workspace_id, executable_hash, argv_hash, env_names, granted_at | host-owned; project cannot create grants |
 | config_snapshots | hash, redacted_json, policy_revision, provenance | immutable per run; no credential values |
 | schema_migrations | version, checksum, applied_at | append-only migration sequence |
+
+Per-run token and cost usage is not a separate table yet: `bollo runs list` reconstructs
+it from that run's `usage.updated` events (per-response token counts summed; cost taken
+from the cumulative figure in the last event), next to the `runs` row and its classifier
+audit. The `usage` row above remains the proposal for request-level persistence.
 
 Budget money uses integer micro-USD internally; human/config amounts convert exactly
 from decimal cents. Price-table version accompanies any estimate. Unknown cost is a

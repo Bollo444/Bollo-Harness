@@ -13,5 +13,8 @@ sha2.workspace = true
 hex.workspace = true
 time.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true

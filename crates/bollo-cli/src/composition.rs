@@ -12,8 +12,9 @@ use serde_json::Value;
 use bollo_core::runtime::{ApprovalChannel, ApprovalRequest as CoreApprovalRequest};
 use bollo_core::{RunOutcome, Runtime};
 use bollo_extensions::{ExtensionError, HookSpec, McpClient, McpServerSpec, McpTool, TrustStore};
+use bollo_policy::classifier::{ClassifierGate, EscalationThresholds, RiskClassifier};
 use bollo_policy::config::{
-    BolloConfig, HookConfig, McpServerConfig, ProviderConfig, ProviderKind,
+    BolloConfig, ClassifierConfig, HookConfig, McpServerConfig, ProviderConfig, ProviderKind,
 };
 use bollo_policy::layers::{build_snapshot, validate_startup, CliOverrides, PolicySnapshot};
 use bollo_policy::MemoryApprovalStore;
@@ -26,7 +27,9 @@ use bollo_protocol::ids::SessionId;
 use bollo_protocol::vocab::{ModeKind, Profile, SandboxCapabilities, SandboxMode};
 use bollo_store::SqliteStore;
 use bollo_tools::{McpDispatch, McpDispatchOutcome, McpToolSpec};
-use bollo_workspace::{probe, CheckpointLog, WorkspaceFs, WorkspaceRoot};
+use bollo_workspace::{
+    create_workspace_sandbox, probe, verified_probe, CheckpointLog, WorkspaceFs, WorkspaceRoot,
+};
 
 use crate::args::{Cli, ProviderArg};
 use crate::CliError;
@@ -302,6 +305,56 @@ fn mcp_summary(server_id: &str, tool_name: &str, content: &[Value]) -> String {
     }
 }
 
+/// The attached advisory classifier: a concrete [`RiskClassifier`] plus the
+/// escalation policy it is bound to. `Composition.classifier == None` means the
+/// runtime makes zero classifier calls, whatever the configuration says.
+pub struct ClassifierRuntime {
+    classifier: Box<dyn RiskClassifier>,
+    profiles: Vec<Profile>,
+    thresholds: EscalationThresholds,
+}
+
+impl ClassifierRuntime {
+    // Constructed only on the live path (and by the unit test below); the
+    // default build deliberately has no way to create one.
+    #[cfg(any(test, feature = "live-http"))]
+    fn new(classifier: Box<dyn RiskClassifier>, config: &ClassifierConfig) -> Self {
+        Self {
+            classifier,
+            profiles: config.profiles.clone(),
+            thresholds: EscalationThresholds {
+                escalate_at: config.escalate_at,
+                min_confidence: config.min_confidence,
+                credential_threshold: config.credential_threshold,
+            },
+        }
+    }
+
+    pub fn model(&self) -> &str {
+        self.classifier.model()
+    }
+
+    pub fn profiles(&self) -> &[Profile] {
+        &self.profiles
+    }
+
+    /// Bind the gate for one turn: same adapter and thresholds, and only the
+    /// configured profiles are eligible for escalation.
+    pub fn gate(&self) -> ClassifierGate<'_> {
+        ClassifierGate::new(self.classifier.as_ref())
+            .with_profiles(self.profiles.clone())
+            .with_thresholds(self.thresholds)
+    }
+}
+
+fn profile_list(profiles: &[Profile]) -> String {
+    profiles
+        .iter()
+        .map(|profile| profile.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 pub struct Composition {
     pub root: WorkspaceRoot,
     pub fs: WorkspaceFs,
@@ -326,6 +379,14 @@ pub struct Composition {
     /// Connected MCP servers. `None` until a turn is about to run, so
     /// inspection commands never launch a server.
     pub mcp: Option<McpRegistry>,
+    /// Advisory classifier (BH-021). `None` means zero calls are possible: the
+    /// default build has no live transport, and an enabled block without the
+    /// `live-http` feature intentionally stays detached.
+    pub classifier: Option<ClassifierRuntime>,
+    /// Run sandbox. Present when workspace mode was verified *and* the host
+    /// container was created; brokered children then launch inside it. A
+    /// creation failure refuses the run instead of falling back to the host.
+    pub sandbox: Option<Box<dyn bollo_workspace::ChildSandbox>>,
 }
 
 impl Composition {
@@ -398,7 +459,7 @@ impl Composition {
             None
         };
 
-        let capabilities = probe();
+        let mut capabilities = probe();
         let cli_overrides = CliOverrides {
             profile: cli.profile.map(Into::into),
             sandbox: cli.sandbox.map(Into::into),
@@ -408,7 +469,7 @@ impl Composition {
             max_spend_cents: cli.max_spend_cents.map(Some),
             tool_output_bytes: None,
         };
-        let snapshot = build_snapshot(
+        let mut snapshot = build_snapshot(
             &user_config,
             project_config.as_ref(),
             &cli_overrides,
@@ -416,7 +477,41 @@ impl Composition {
             1,
         )
         .map_err(|err| CliError::usage(format!("policy: {err}")))?;
+        if snapshot.sandbox == SandboxMode::Workspace {
+            // An enforcement claim must be backed by an executed check in this
+            // process: the cheap probe above makes no claim. When the check
+            // fails the flags stay false and startup refuses below, and the
+            // broker never falls back to host execution for a workspace run.
+            capabilities = verified_probe();
+            snapshot.capabilities = capabilities.clone();
+        }
         validate_startup(&snapshot).map_err(|err| CliError::usage(format!("{err}")))?;
+
+        // --- advisory classifier: trusted opt-in, disabled by default ---
+        // Attaching the gate needs `classifier.enabled` in the trusted user
+        // configuration *and* a build with the live transport. Otherwise the
+        // gate stays detached and no classifier traffic is possible, even for
+        // an enabled block. Project configuration cannot carry this block at
+        // all, so it can never enable escalation.
+        let classifier = if user_config.classifier.enabled {
+            match build_classifier(&user_config.classifier) {
+                Ok(runtime) => {
+                    warnings.push(format!(
+                        "advisory classifier attached (model {}; profiles {}); it can only \
+                         escalate allow to ask, and every failure is neutral",
+                        runtime.model(),
+                        profile_list(runtime.profiles())
+                    ));
+                    Some(runtime)
+                }
+                Err(reason) => {
+                    warnings.push(reason);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Risk acknowledgement gates *execution*, not inspection: read-only
         // commands stay usable without it.
@@ -496,7 +591,9 @@ impl Composition {
             risk_acknowledged: cli.acknowledge_risk,
             warnings,
             recovered_operations,
+            sandbox: None,
             mcp: None,
+            classifier,
         })
     }
 
@@ -584,6 +681,22 @@ impl Composition {
             .unwrap_or(false)
     }
 
+    /// One-line advisory-classifier posture for `doctor` and
+    /// `config validate`. Never includes credential values.
+    pub fn classifier_status(&self) -> String {
+        match &self.classifier {
+            Some(runtime) => format!(
+                "attached (model {}; profiles {}; advisory allow→ask only)",
+                runtime.model(),
+                profile_list(runtime.profiles())
+            ),
+            None if self.user_config.classifier.enabled => {
+                "enabled in config but detached; zero calls in this build".to_string()
+            }
+            None => "disabled (zero calls)".to_string(),
+        }
+    }
+
     pub fn provider_script_label(&self) -> Option<String> {
         self.provider_choice
             .script
@@ -599,6 +712,24 @@ impl Composition {
     }
 
     /// Facts recovery needs before a stored session is resumed.
+    /// Create the run's enforcement sandbox on first use when workspace mode
+    /// was verified for this process. Creation failure refuses the run; there
+    /// is no silent fallback to host execution.
+    pub fn ensure_sandbox(&mut self) -> Result<(), CliError> {
+        if self.sandbox.is_some() || self.snapshot.sandbox != SandboxMode::Workspace {
+            return Ok(());
+        }
+        match create_workspace_sandbox(self.root.canonical()) {
+            Ok(sandbox) => {
+                self.sandbox = sandbox;
+                Ok(())
+            }
+            Err(err) => Err(CliError::usage(format!(
+                "workspace sandbox requested but the container could not be created: {err}"
+            ))),
+        }
+    }
+
     pub fn recovery_report(&self, session: &SessionId) -> Result<(usize, usize), CliError> {
         let interrupted = self
             .store
@@ -646,6 +777,8 @@ pub fn execute_turn(
         provider,
         model,
         mcp,
+        classifier,
+        sandbox,
         ..
     } = composition;
     let provider: &dyn Provider = provider
@@ -671,7 +804,15 @@ pub fn execute_turn(
     runtime = runtime
         .with_hooks(hooks.clone())
         .with_cancel(cancel)
-        .with_claude_md(settings.include_claude_md);
+        .with_claude_md(settings.include_claude_md)
+        .with_sandbox(sandbox.as_deref());
+    // Advisory classifier (BH-021): attached only when the trusted config
+    // enabled it and this build has a live transport. The gate itself decides
+    // eligibility, so deny/ask, read-only effects and unselected profiles
+    // still make zero calls.
+    if let Some(classifier) = classifier.as_ref() {
+        runtime = runtime.with_classifier(classifier.gate());
+    }
     if let Some(registry) = mcp.as_mut() {
         // Borrow order matters: clone the discovered tools first, then hand the
         // registry to the runtime as the dispatch port.
@@ -731,7 +872,15 @@ impl bollo_tui::TurnRunner for InteractiveRunner<'_> {
             };
         }
         composition.ensure_mcp();
-        let mut channel = TuiChannel::new(approvals);        let outcome = execute_turn(
+        if let Err(err) = composition.ensure_sandbox() {
+            eprintln!("bollo: {}", err.message);
+            return bollo_tui::TurnOutcome {
+                exit_code: err.code,
+                summary: err.message,
+            };
+        }
+        let mut channel = TuiChannel::new(approvals);
+        let outcome = execute_turn(
             &mut composition,
             &self.settings,
             prompt,
@@ -754,8 +903,14 @@ pub fn summarize(outcome: &RunOutcome) -> String {
         .as_ref()
         .map(|reason| format!(", reason {reason}"))
         .unwrap_or_default();
+    // Classifier activity rides the turn summary, never the event stream.
+    let classifier = if outcome.classifier.attached {
+        format!(" · classifier {}", outcome.classifier.compact())
+    } else {
+        String::new()
+    };
     format!(
-        "{state}{reason} · {verification} · {} tool call(s)",
+        "{state}{reason} · {verification} · {} tool call(s){classifier}",
         outcome.tool_calls
     )
 }
@@ -830,6 +985,7 @@ pub fn default_user_config() -> BolloConfig {
         privacy: Default::default(),
         mcp_servers: Vec::new(),
         hooks: Vec::new(),
+        classifier: ClassifierConfig::default(),
     }
 }
 
@@ -865,6 +1021,37 @@ fn hook_spec(hook: &HookConfig) -> Result<HookSpec, CliError> {
         timeout_seconds: hook.timeout_seconds,
         env_names: Vec::new(),
     })
+}
+
+// --- classifier construction --------------------------------------------------
+
+/// Attach the advisory classifier. The default (non-`live-http`) build returns
+/// a diagnostic instead: the gate stays detached and no classifier traffic is
+/// possible, which keeps "disabled by default" true even for an enabled block.
+#[cfg(feature = "live-http")]
+fn build_classifier(config: &ClassifierConfig) -> Result<ClassifierRuntime, String> {
+    let settings = bollo_classifier::TypeSafeSettings {
+        origin: config.origin.clone(),
+        model: config.model.clone(),
+        credential_env: config.credential_env.clone(),
+        timeout_ms: config.timeout_ms,
+    };
+    match bollo_classifier::TypeSafeClassifier::live(settings) {
+        Ok(classifier) => Ok(ClassifierRuntime::new(Box::new(classifier), config)),
+        Err(err) => Err(format!(
+            "classifier.enabled is set but the adapter rejected the configuration ({err}); the \
+             gate stays detached and no classifier traffic is possible"
+        )),
+    }
+}
+
+#[cfg(not(feature = "live-http"))]
+fn build_classifier(_config: &ClassifierConfig) -> Result<ClassifierRuntime, String> {
+    Err(
+        "classifier.enabled is set but this build has no live HTTPS transport; rebuild with \
+         --features live-http. The gate stays detached and no classifier traffic is possible"
+            .to_string(),
+    )
 }
 
 // --- provider construction ---------------------------------------------------
@@ -1050,4 +1237,71 @@ pub fn parse_replay_script(json: &str) -> Result<Vec<ScriptedResponse>, CliError
 /// Helper used by `doctor` and tests: is a path inside the state directory?
 pub fn is_inside_state(state_dir: &Path, candidate: &Path) -> bool {
     candidate.starts_with(state_dir)
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::*;
+
+    fn outcome_with(classifier: bollo_core::ClassifierAudit) -> RunOutcome {
+        RunOutcome {
+            run_id: bollo_protocol::ids::RunId::generate(),
+            state: bollo_protocol::vocab::TerminalState::Completed,
+            reason: None,
+            verification: bollo_protocol::vocab::VerificationStatus::Skipped,
+            tool_calls: 1,
+            usage: Default::default(),
+            classifier,
+            exit_code: 0,
+        }
+    }
+
+    /// The turn summary surfaces classifier activity only for instrumented
+    /// runs; default runs are unchanged.
+    #[test]
+    fn summarize_surfaces_classifier_activity_only_when_attached() {
+        let plain = summarize(&outcome_with(Default::default()));
+        assert_eq!(plain, "completed · skipped · 1 tool call(s)", "{plain}");
+
+        let mut audit = bollo_core::ClassifierAudit {
+            attached: true,
+            ..Default::default()
+        };
+        audit.record(
+            &bollo_policy::classifier::ClassifierVerdict::available("jev-test", 1.2, 0.9, 0.0),
+            true,
+        );
+        let instrumented = summarize(&outcome_with(audit));
+        assert_eq!(
+            instrumented, "completed · skipped · 1 tool call(s) · classifier 1 call, 1 escalated",
+            "{instrumented}"
+        );
+    }
+
+    /// The config block maps onto the gate verbatim: profiles, thresholds and
+    /// the pinned model, with no widening anywhere.
+    #[test]
+    fn classifier_runtime_maps_config_onto_the_gate() {
+        let config = ClassifierConfig {
+            enabled: true,
+            origin: ClassifierConfig::default().origin,
+            model: "jev-test".into(),
+            credential_env: "TYPESAFE_API_KEY".into(),
+            timeout_ms: 1500,
+            escalate_at: 0.8,
+            min_confidence: 0.4,
+            credential_threshold: 0.95,
+            profiles: vec![Profile::Unrestricted],
+        };
+        let runtime = ClassifierRuntime::new(
+            Box::new(bollo_policy::ScriptedClassifier::new("jev-test", vec![])),
+            &config,
+        );
+        assert_eq!(runtime.model(), "jev-test");
+        let gate = runtime.gate();
+        assert_eq!(gate.profiles(), &[Profile::Unrestricted]);
+        assert_eq!(gate.thresholds().escalate_at, 0.8);
+        assert_eq!(gate.thresholds().min_confidence, 0.4);
+        assert_eq!(gate.thresholds().credential_threshold, 0.95);
+    }
 }

@@ -60,7 +60,7 @@ opaque blocks are not shipped to another vendor.
 | Persistence | BH-008, BH-009 | Journal/recovery and conditional patch restore |
 | Interfaces | BH-011, BH-012 | Keyboard TUI and NDJSON headless client |
 | Extension and privacy | BH-014, BH-015, BH-016 | MCP stdio, constrained hooks, local-first retention |
-| Future integrations | BH-017 through BH-020 | Local API, remote MCP, ACP, bounded subagents |
+| Future integrations | BH-017 through BH-021 | Local API, remote MCP, ACP, bounded subagents, advisory classifier |
 
 ## Nonfunctional requirements and targets
 
