@@ -394,6 +394,8 @@ mod diag {
                 "excluded_files": access.excluded_files.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             },
             "build_tool_variables": build_tools.variables.keys().collect::<Vec<_>>(),
+            "nul_device": nul_device_report(),
+            "named_pipe": named_pipe_report(),
             "policy": policy_report(),
             "code_integrity": code_integrity_report(),
         })
