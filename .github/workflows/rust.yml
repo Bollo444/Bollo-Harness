@@ -15,13 +15,15 @@ jobs:
       RUST_BACKTRACE: '1'
     steps:
       - uses: actions/checkout@v4
-      # The toolchain is pinned in rust-toolchain.toml, so this cache is keyed
-      # on that pin and the lockfile: a toolchain or dependency change starts
-      # clean, while repeat runs reuse the registry and the build directory.
-      # save-always keeps the cache materializing while the containment test
-      # below is still red on a runner: by default it saves only on success.
-      - name: Cache cargo registry and build
-        uses: actions/cache@v5
+      # The toolchain is pinned in rust-toolchain.toml, so the cache is keyed on
+      # that pin and the lockfile: a toolchain or dependency change starts clean,
+      # while repeat runs reuse the registry and the build directory.
+      # Restore and save are separate steps because this job is still red on the
+      # runner-only containment test: the combined form saves only on success, and
+      # its `save-always` input is deprecated and no longer honored.
+      - name: Restore cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
@@ -30,7 +32,6 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}"
           restore-keys: |
             ${{ runner.os }}-cargo-
-          save-always: true
       - name: Install Rust 1.93.1
         run: |
           # rust-toolchain.toml pins this same version for every cargo call.
@@ -52,3 +53,15 @@ jobs:
       # parallel; they run single-threaded for a deterministic result.
       - name: Test bollo-api (single-threaded)
         run: cargo test -p bollo-api --no-fail-fast --locked -- --test-threads=1
+
+      # Save even when a test above failed, so a red run still warms the next
+      # one. The restore step computed the key; an exact hit makes this a no-op.
+      - name: Save cargo cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
