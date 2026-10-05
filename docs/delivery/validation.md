@@ -201,3 +201,43 @@ Containment is intact; the contained *build* depends on a host device the image 
 from AppContainers. The job stays red until a host-independent answer is chosen (granting
 the device, or a contained spawn path that does not need NUL); the test is not weakened to
 hide the boundary.
+
+The same evidence, reproduced on demand instead of transcribed: `scripts/containment_evidence.py`
+runs the escape suite and the contained link proof, one test at a time, and prints the block below
+(it also writes it to `target/containment-evidence/evidence.md`). Local run at the commit that
+added the tool:
+
+### Containment evidence — 2026-10-05 21:04:46Z — local — `eeeff3c`
+
+One command, from the repository root:
+
+```sh
+python scripts/containment_evidence.py
+```
+
+Toolchain: `rustc 1.93.1 (01f6ddf75 2026-02-11) / host: x86_64-pc-windows-msvc`. Each test runs through its own `cargo test`,
+single-threaded, so the phase numbers are the gate CI runs and the per-test
+numbers are the times libtest reports for the test itself.
+
+| Phase | Tests | Result | Wall clock |
+| --- | --- | --- | --- |
+| Build test binaries | — | ok | 0.2 s |
+| escape suite (`container_escapes`) | 6/6 passed | ok | 41.6 s |
+| contained link proof (`container_toolchain`) | 2/2 passed | ok | 35.2 s |
+| **Total** | **8/8 passed** | **ok** | **76.9 s** |
+
+Per test (own libtest time, then the enclosing `cargo test` wall clock):
+
+| Test | Result | Test time | cargo wall |
+| --- | --- | --- | --- |
+| `container_escapes::alternate_data_streams_outside_the_grant_are_denied` | ok | 2.5 s | 2.7 s |
+| `container_escapes::contained_runs_leave_no_surviving_process_tree` | ok | 17.6 s | 17.8 s |
+| `container_escapes::foreign_inheritable_handles_do_not_cross_into_the_container` | ok | 12.7 s | 12.9 s |
+| `container_escapes::junction_escape_write_is_denied` | ok | 2.6 s | 2.8 s |
+| `container_escapes::rename_across_the_grant_boundary_is_denied` | ok | 2.5 s | 2.7 s |
+| `container_escapes::symlink_escape_write_is_denied` | ok | 2.6 s | 2.8 s |
+| `container_toolchain::contained_cargo_builds_with_host_toolchain_grants` | ok | 32.1 s | 32.3 s |
+| `container_toolchain::credential_stores_stay_outside_every_grant` | ok | 2.7 s | 2.9 s |
+
+On the runner the escape suite passes the same way and the link proof fails, so the block above
+is the host-side baseline its denial is read against.

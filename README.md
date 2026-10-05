@@ -52,6 +52,13 @@ cargo build --workspace            # clean, no warnings
 cargo test  --workspace            # 335 tests: unit, contract, policy fixtures, loop, recovery, MCP gate, API, classifier, Windows containment, escape attempts + toolchain read grants
 ```
 
+The containment evidence has one command of its own — the escape suite and the
+contained link proof, one test at a time, printed as a paste-ready timing block:
+
+```sh
+python scripts/containment_evidence.py
+```
+
 Headless runs need no network. Use the built-in deterministic replay provider:
 
 ```sh

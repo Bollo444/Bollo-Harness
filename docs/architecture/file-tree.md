@@ -1,6 +1,6 @@
 # File structure — actual repository and proposed remainder
 
-**Status:** the tracked tree at `31a303c` (2026-10-05), read from `git ls-files`: 171
+**Status:** the tracked tree at `eeeff3c` (2026-10-05), read from `git ls-files`: 172
 files, 58 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
 still only proposed is collected at the end instead of mixed into the tree.
 
@@ -18,6 +18,7 @@ Bollo-Harness/
 ├── .github/workflows/
 │   ├── docs.yml                      documentation contract validation
 │   └── rust.yml                      Windows: pinned toolchain, cargo cache, locked tests
+├── scripts/containment_evidence.py   escape suite and link proof, timed (one command)
 ├── scripts/validate_docs.py          schemas, links, traceability and fixture checks
 ├── crates/
 │   ├── bollo-protocol/               cross-crate language; no policy and no I/O
