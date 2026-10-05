@@ -18,6 +18,8 @@ jobs:
       # The toolchain is pinned in rust-toolchain.toml, so this cache is keyed
       # on that pin and the lockfile: a toolchain or dependency change starts
       # clean, while repeat runs reuse the registry and the build directory.
+      # save-always keeps the cache materializing while the containment test
+      # below is still red on a runner: by default it saves only on success.
       - name: Cache cargo registry and build
         uses: actions/cache@v5
         with:
@@ -28,6 +30,7 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}"
           restore-keys: |
             ${{ runner.os }}-cargo-
+          save-always: true
       - name: Install Rust 1.93.1
         run: |
           # rust-toolchain.toml pins this same version for every cargo call.
