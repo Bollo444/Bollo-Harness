@@ -1,7 +1,7 @@
 # File structure — actual repository and proposed remainder
 
-**Status:** the tracked tree at `5510f1a` (2026-10-07), read from `git ls-files`: 172
-files, 58 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
+**Status:** the tracked tree at `0406ad1` (2026-10-07), read from `git ls-files`: 173
+files, 59 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
 still only proposed is collected at the end instead of mixed into the tree.
 
 ## Actual repository (tracked)
@@ -122,9 +122,10 @@ Bollo-Harness/
 │       ├── recovery.rs               crash recovery at journal boundaries
 │       ├── classifier.rs             BH-021 through the real runtime
 │       └── mcp_tools.rs              discovered MCP tools behind the same gate
-└── docs/                             58 tracked documents (validator input)
+└── docs/                             59 tracked documents (validator input)
     ├── README.md                     documentation atlas
     ├── BLUEPRINT.md                  executive and technical overview
+    ├── getting-started.md            build, test, a first offline run, refusals and limits
     ├── arena-conversation.md         design conversation record
     ├── architecture/                 system design, runtime, data, diagrams, this tree
     ├── product/                      vision, PRD, MVP, requirements, traceability
