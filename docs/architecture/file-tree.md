@@ -1,7 +1,7 @@
 # File structure — actual repository and proposed remainder
 
-**Status:** the tracked tree at `0406ad1` (2026-10-07), read from `git ls-files`: 173
-files, 59 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
+**Status:** the tracked tree at `e7fc5ee` (2026-10-07), read from `git ls-files`: 175
+files, 61 of them under `docs/`. The Rust workspace exists and is exercised by CI; what is
 still only proposed is collected at the end instead of mixed into the tree.
 
 ## Actual repository (tracked)
@@ -122,10 +122,11 @@ Bollo-Harness/
 │       ├── recovery.rs               crash recovery at journal boundaries
 │       ├── classifier.rs             BH-021 through the real runtime
 │       └── mcp_tools.rs              discovered MCP tools behind the same gate
-└── docs/                             59 tracked documents (validator input)
+└── docs/                             61 tracked documents (validator input)
     ├── README.md                     documentation atlas
     ├── BLUEPRINT.md                  executive and technical overview
     ├── getting-started.md            build, test, a first offline run, refusals and limits
+    ├── work-journal.md               per-stretch history: changes, verification, open items
     ├── arena-conversation.md         design conversation record
     ├── architecture/                 system design, runtime, data, diagrams, this tree
     ├── product/                      vision, PRD, MVP, requirements, traceability
@@ -136,7 +137,7 @@ Bollo-Harness/
     ├── ux/                           interaction design and terminal wireframes
     ├── delivery/                     MPP, backlog and risks, tests, operations, validation
     ├── decisions/                    ADRs and open decisions
-    └── research/                     pinned upstream evidence and inventories
+    └── research/                     pinned upstream evidence, inventories, local surveys
 ```
 
 Fixtures for the integration tests are produced by the fixture binaries listed above
