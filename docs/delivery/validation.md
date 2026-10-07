@@ -246,7 +246,10 @@ Exactly one ACE was added — `0x12019f`, the `NUL_RIGHTS` the code names, for t
 container's own SID — in front of the four the image ships, and every NUL open the
 container tries reads `ok` where the same capture read denials before. Containment is
 unchanged by it: `raw_appname_breakaway` and the named-pipe probe still fail in the same
-run's process matrix.
+run's process matrix. The entry does not survive the run: the next push's capture
+(`37666397782`, `b080787`) reads the device with its original four ACEs before it does
+anything, so the previous run's per-run entry is gone — the drop revokes it, as the unit
+test asserts.
 
 The same evidence, reproduced on demand instead of transcribed: `scripts/containment_evidence.py`
 runs the escape suite and the contained link proof, one test at a time, and prints the block below
