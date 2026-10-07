@@ -4,8 +4,10 @@ PROPOSAL · BH-008, BH-009, BH-016 · [runtime](runtime.md).
 
 ## Store layout and records
 
-SQLite with foreign keys, WAL and `synchronous=FULL` is the proposed durability baseline.
-Measure its cost; do not weaken safety silently. The database stores metadata/events;
+SQLite with foreign keys, WAL and `synchronous=FULL` is the durability baseline the store
+implements (`bollo-store` sets the three pragmas on every connection; ADR-015 records why
+embedded SQLite rather than a log file or a server). Measure its cost; do not weaken
+safety silently. The database stores metadata/events;
 large outputs live in a private content-addressed artifact directory. Files/directories
 use owner-only permissions; neither filesystem permissions nor redaction equal encryption.
 

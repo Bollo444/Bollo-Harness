@@ -1,7 +1,9 @@
 # Architecture decision records and owner review queue
 
-All ADRs below are **PROPOSED**, not owner-approved. Date: 2026-10-03.
-Changes append rationale, consequences, evidence and acceptance rather than erasing history.
+All ADRs below are **PROPOSED**, not owner-approved. Date: 2026-10-03; the entries added
+2026-10-07 say in their own text whether they record something already implemented in the
+MVP or a choice still waiting for the owner (ADR-016). Changes append rationale,
+consequences, evidence and acceptance rather than erasing history.
 
 ## ADR-001 — independent harness, not a merged fork
 
@@ -176,6 +178,80 @@ Program Files ACL is touched (and could not be, by an unelevated user). **Eviden
 unit tests. **Gate:** the credential-canary test must stay green; revisit when
 a revoke/refresh command or broader host read grants are added.
 
+## ADR-013 — grant the NUL device to the container that needs it
+
+**Decision:** `AppContainer::create_workspace` checks the NUL device for the container it has
+just built and, where no Application Packages SID covers it, writes **one non-inheritable
+ACE** for that container's own SID on the run's grant list, so the existing revoke-on-drop
+removes it; the answer is recorded and the contained link proof asserts it.
+**Alternatives:** require every host to carry the Application Packages ACE (the Windows 11
+default); spawn contained children through a stdio path that never opens NUL; weaken the
+proof into a host-conditional skip.
+**Reason:** Rust's std opens `\\.\NUL` for a child's stdin on every spawn — `Command::output()`
+included — so a contained `cargo` cannot start `rustc` where the device DACL withholds it;
+measured on the hosted runner, while raw broker spawns and the escape suite were unaffected.
+**Consequences:** containment no longer depends on a host property the harness cannot supply;
+the cost is one permission (`WRITE_DAC` on the device object) and one ACE per run, revoked on
+drop. A host that withholds the device *and* runs unelevated cannot be contained and
+buildable at once, and is named in the failure instead of surfacing inside cargo.
+**Evidence:** [validation](../delivery/validation.md) — the local reduction (exit 101 under the
+runner's device descriptor, exit 0 at the fixing revision) and the runner capture showing one
+added ACE (`0x12019f`) that the next run's capture no longer sees; grant/check/revoke unit tests.
+**Gate:** the link proof keeps asserting the recorded answer; revisit if contained children
+stop needing null stdio.
+
+## ADR-014 — containment evidence is published by CI, never transcribed
+
+**Decision:** the Windows workflow runs `scripts/containment_evidence.py` after the test steps
+(`if: always()`, never gating the job), appends the block to the job summary and uploads it as
+the `containment-evidence` artifact; on a runner the block's heading links the run it came from.
+**Alternatives:** keep pasting blocks into the validation log by hand; make the evidence step
+the gate; print timings to the log with no artifact.
+**Reason:** a transcribed block can drift from the run it claims while still looking
+authoritative, and the timed suites matter most exactly when the gate failed.
+**Consequences:** runner-side numbers are read from an artifact; the job costs about a minute
+more; the test steps remain the only gate.
+**Evidence:** [validation](../delivery/validation.md) (`37665222287`, `37668383539`).
+**Gate:** the artifact name stays stable; revisit if the extra minute hurts pull requests.
+
+## ADR-015 — the journal is embedded SQLite, not a log file or a server
+
+**Decision:** journal to embedded SQLite through `rusqlite 0.32` (bundled), opened with
+`journal_mode=WAL`, `synchronous=FULL` and `foreign_keys=ON` on every connection, in one
+per-user state directory.
+**Alternatives:** append-only file plus an index; an external database server; an event-sourcing
+framework.
+**Reason:** the journal needs transactional batches (acquiring a session lease with the run's
+start), crash recovery that can mark unknown effects, and read-your-writes queries
+(`runs list`, `sessions`, checkpoints) with no daemon — which ADR-003 keeps out of the MVP.
+**Consequences:** durability is real but not free (fsync per commit); the store is one file
+plus a content-addressed artifact directory; erasure is bounded by WAL and backup reality,
+which [privacy](../security/privacy.md) states rather than implies.
+**Evidence:** the pragmas in `crates/bollo-store/src/lib.rs`, the crash-recovery suite
+(`tests/tests/recovery.rs`), and ADR-007 for what the journal may claim.
+**Gate:** migrations stay additive and versioned; `synchronous` is never weakened silently.
+
+## ADR-016 — adopt ratatui for the interactive path (proposal; owner decision pending)
+
+**Decision (proposed):** build the interactive path on `ratatui` 0.30.2 with its crossterm
+backend, behind the existing seams (`Presenter`, `Transcript`, `SlashCommands`,
+`TurnRunner`/`Approver`), staged: keep the protocol-facing types, replace the render/input
+layer, add offscreen golden tests, and leave the headless renderer and `--no-color` untouched.
+**Alternatives:** keep the hand-rolled line renderer; cursive 0.21 (retained-mode callbacks,
+largest measured closure); iocraft 0.9 (declarative components, youngest ecosystem);
+tuirealm 4 (a further layer over ratatui).
+**Reason:** today's TUI cannot be verified without a console, has no raw-mode input, and would
+leave Windows key/resize handling to us. ratatui renders to an offscreen backend — executed
+here at 38×4 with the cells asserted and no TTY — which closes that gap, and it has the
+smallest measured closure of the three frameworks (64, against 82 and 66).
+**Consequences:** about 64 crates in the normal closure, a rewritten render loop and width
+fitting, and a framework to track; in exchange the interactive path becomes testable in CI and
+gains real input handling.
+**Evidence:** [research/tui-libraries.md](../research/tui-libraries.md) — pinned versions,
+measured closures, the probe run, and the documented Windows key-event trap.
+**Gate:** owner approval (OD-12) and a style direction; implementation starts with the golden
+tests, not after them.
+
 ## Open decisions requiring approval
 
 | ID | Question | Recommended default | Needed by |
@@ -191,3 +267,4 @@ a revoke/refresh command or broader host read grants are added.
 | OD-09 | Local encryption requirements? | OS access control/FDE in MVP; no false at-rest claim | P0a |
 | OD-10 | Accessibility release bar? | Keyboard/no-color/linear output; test screen reader claims | P1d |
 | OD-11 | Adopt Jev as an advisory risk classifier? | Escalation-only, opt-in, fail-neutral; never authorizes | classifier design |
+| OD-12 | Interactive TUI stack and style? | ratatui 0.30 + crossterm behind the existing seams | before interactive UX work |

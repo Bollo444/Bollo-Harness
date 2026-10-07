@@ -7,7 +7,9 @@ green on `main`: the Windows workflow runs 343 tests, the container escape suite
 contained `cargo build` link proof, and publishes its own [containment
 evidence](docs/delivery/validation.md) as a run artifact. The documents below still
 describe the wider proposal, including parts that are not built; what runs today, and
-how to try it in five minutes, is in **[getting started](docs/getting-started.md)**.
+how to try it in five minutes, is in **[getting started](docs/getting-started.md)**; the
+history of the work, with the verification behind each step, is in the
+**[work journal](docs/work-journal.md)**.
 
 Bollo combines workflow ideas documented by Claude Code with engineering patterns
 studied in official Grok Build. The independent community Grok CLI is a supplementary

@@ -35,6 +35,7 @@ owns semantic consistency.
 ### Start here
 
 - [Getting started](getting-started.md) — build, test, first offline run, exit codes, refusals and limits
+- [Work journal](work-journal.md) — what changed in each stretch of work, what was verified, what is open
 
 ### Conversation archive
 
@@ -69,6 +70,7 @@ owns semantic consistency.
 - [File structure — actual repository and proposed remainder](architecture/file-tree.md)
 - [Runtime, state machine, cancellation and recovery](architecture/runtime.md)
 - [System design and component contracts](architecture/system-design.md)
+- [Rust TUI libraries — survey for the interactive path](research/tui-libraries.md)
 
 ### Security and user autonomy
 
