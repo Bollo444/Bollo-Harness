@@ -59,6 +59,10 @@ contained link proof, one test at a time, printed as a paste-ready timing block:
 python scripts/containment_evidence.py
 ```
 
+CI runs that same command on every push, appends the block to the job summary and
+uploads it as the `containment-evidence` artifact, so the numbers the validation log
+quotes are read from a run instead of typed from one.
+
 Headless runs need no network. Use the built-in deterministic replay provider:
 
 ```sh

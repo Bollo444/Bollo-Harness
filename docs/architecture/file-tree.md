@@ -17,8 +17,9 @@ Bollo-Harness/
 ├── .gitignore                        target/, .venv/, research caches, local state
 ├── .github/workflows/
 │   ├── docs.yml                      documentation contract validation
-│   └── rust.yml                      Windows: pinned toolchain, cargo cache, locked tests
-├── scripts/containment_evidence.py   escape suite and link proof, timed (one command)
+│   └── rust.yml                      Windows: pinned toolchain, cargo cache, locked tests,
+│                                     published containment evidence
+├── scripts/containment_evidence.py   escape suite and link proof, timed (CI publishes it)
 ├── scripts/validate_docs.py          schemas, links, traceability and fixture checks
 ├── crates/
 │   ├── bollo-protocol/               cross-crate language; no policy and no I/O

@@ -18,9 +18,9 @@ jobs:
       # The toolchain is pinned in rust-toolchain.toml, so the cache is keyed on
       # that pin and the lockfile: a toolchain or dependency change starts clean,
       # while repeat runs reuse the registry and the build directory.
-      # Restore and save are separate steps because this job is still red on the
-      # runner-only containment test: the combined form saves only on success, and
-      # its `save-always` input is deprecated and no longer honored.
+      # Restore and save are separate steps so a red run still warms the cache:
+      # the combined form saves only on success, and its `save-always` input is
+      # deprecated and no longer honored.
       - name: Restore cargo cache
         id: cargo-cache
         uses: actions/cache/restore@v5
@@ -70,6 +70,34 @@ jobs:
       # parallel; they run single-threaded for a deterministic result.
       - name: Test bollo-api (single-threaded)
         run: cargo test -p bollo-api --no-fail-fast --locked -- --test-threads=1
+
+      # The containment evidence is published instead of transcribed: the same two
+      # suites the gate above runs, one test at a time and timed, printed as the
+      # paste-ready block the validation log quotes. It never gates the job (the
+      # test steps above do) and it runs even when they failed, which is what makes
+      # a red run readable.
+      - uses: actions/setup-python@v5
+        if: always()
+        with:
+          python-version: '3.11'
+      - name: Containment evidence
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          python scripts/containment_evidence.py
+          $block = 'target/containment-evidence/evidence.md'
+          if (Test-Path $block) {
+            Get-Content $block -Raw -Encoding utf8 |
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          }
+      - name: Upload containment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: containment-evidence
+          path: target/containment-evidence/evidence.md
+          if-no-files-found: warn
 
       # Save even when a test above failed, so a red run still warms the next
       # one, but skip it on an exact hit: the service refuses a duplicate key

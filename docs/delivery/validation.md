@@ -253,8 +253,10 @@ test asserts.
 
 The same evidence, reproduced on demand instead of transcribed: `scripts/containment_evidence.py`
 runs the escape suite and the contained link proof, one test at a time, and prints the block below
-(it also writes it to `target/containment-evidence/evidence.md`). Local run at the fixing
-revision:
+(it also writes it to `target/containment-evidence/evidence.md`). CI runs that same command on
+every push — after the test steps, `if: always()`, never gating the job — appends the block to the
+run's job summary and uploads it as the `containment-evidence` artifact, so a runner-side block is
+read from the run instead of typed in. Local run at the fixing revision:
 
 ### Containment evidence — 2026-10-07 18:21:30Z — local — `5510f1a`
 

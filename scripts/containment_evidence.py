@@ -9,6 +9,9 @@ describes exactly the gate CI runs; the per-test numbers come from libtest itsel
 
     python scripts/containment_evidence.py
 
+On a hosted runner the heading also links the run the block came from, so the block
+that gets pasted into the validation log points back at its own evidence.
+
 Exit codes: 0 every test passed, 1 the build or a test failed, 2 nothing ran (the
 targets are Windows-only, so a non-Windows host has no such tests).
 """
@@ -148,6 +151,19 @@ def environment(with_host: bool) -> str:
     return f'{where} ({socket.gethostname()})' if with_host else where
 
 
+def run_link() -> str:
+    """The CI run this block came from, when the environment names one: the block
+    ends up in a tracked document, so it should point back at its own evidence."""
+    if not os.environ.get('GITHUB_ACTIONS'):
+        return ''
+    repo = os.environ.get('GITHUB_REPOSITORY')
+    run = os.environ.get('GITHUB_RUN_ID')
+    if not repo or not run:
+        return ''
+    server = os.environ.get('GITHUB_SERVER_URL', 'https://github.com')
+    return f' — [run {run}]({server}/{repo}/actions/runs/{run})'
+
+
 def report(binary: str, where: str, build: tuple[str, float] | None, tests: list[Test],
            tails: dict[Path, str]) -> str:
     """The paste-ready block: phases first, then one row per test."""
@@ -155,7 +171,7 @@ def report(binary: str, where: str, build: tuple[str, float] | None, tests: list
     failed = len(tests) - passed
     ok = failed == 0 and tests
     lines = [
-        f'### Containment evidence — {stamp()} — {where} — `{revision()}`',
+        f'### Containment evidence — {stamp()} — {where} — `{revision()}`{run_link()}',
         '',
         'One command, from the repository root:',
         '',
