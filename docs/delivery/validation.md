@@ -105,7 +105,7 @@ These observations apply to this design baseline; rerun relevant checks after ed
   `link.exe` to `...\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\link.exe`, and the
   new discovery unit tests passed; the job then failed at the same pre-existing
   `rustc -vV` assertion. CI is not claimed green.
-## Observed CI runs on 2026-10-05 (GitHub Actions)
+## Observed CI runs on 2026-10-05 and 2026-10-07 (GitHub Actions)
 
 Conclusions, run IDs and step timings below are copied from the runs (`gh run view`), not
 inferred. A red run is reported as red.
@@ -113,12 +113,13 @@ inferred. A red run is reported as red.
 ### Documentation contracts — green
 
 The workflow succeeded on every push since it landed, 11–22 s per run, including
-`37315793036` for `4301570` and `37315185868` for `e34ec64`.
+`37315793036` for `4301570`, `37315185868` for `e34ec64` and `37665222319` for `5510f1a`.
 
-### Rust workspace (Windows) — red on every run
+### Rust workspace (Windows) — red until the device grant
 
-One job per push; every run has failed. Step timings are seconds from the run's own step
-records:
+One job per push. Every run failed at the same contained-build assertion until the device
+grant; step timings are seconds from the run's own step records, and the last row is the
+first green run:
 
 | Run | Commit | Job | Build | Test | Cargo cache |
 |---|---|---|---|---|---|
@@ -132,14 +133,16 @@ records:
 | 37268300605 | `d6485f3` | 86 | 5 | 43 | restore hit 15 s; save skipped |
 | 37315185806 | `e34ec64` | 92 | 5 | 47 | restore 14 s; save skipped |
 | 37315792636 | `4301570` | 120 | 9 | 61 | restore hit; save skipped |
+| 37665222287 | `5510f1a` | 231 | 18 | 77 | **green**: the contained build grants the device; the `bollo-api` step ran too (33 s) |
 
 The escape suite runs on the runner and passes: `container_escapes` reports 6/6 in 15.5 s
-(`37263793995`), 15.1 s (`37268300605`), 16.5 s (`37315185806`) and 16.0 s
-(`37315792636`).
+(`37263793995`), 15.1 s (`37268300605`), 16.5 s (`37315185806`), 16.0 s
+(`37315792636`) and 16.4 s (`37665222287`, the first run with the device granted).
 
-The `Test bollo-api (single-threaded)` step is **skipped in every run** because the
-workspace test step fails first; the loopback suite has therefore never executed on a
-runner. It passes locally single-threaded (18/18) plus 13 crate unit tests.
+The `Test bollo-api (single-threaded)` step was **skipped in every earlier run** because
+the workspace test step failed first; it executed for the first time in `37665222287`,
+with the device grant in place, and passed (31 tests: the loopback suite 18/18
+single-threaded, plus 13 crate unit tests).
 
 ### Cargo cache measurements
 
@@ -228,12 +231,29 @@ back afterwards: the restored descriptor
 matches the pre-perturbation capture in `target/container-diagnostics-local.json` (the
 intermediate write had also set `SE_DACL_AUTO_INHERITED`, which the restore drops).
 
+On the runner the same proof passes, and the capture says what it took. `37665222287` at
+`5510f1a`: the workspace step ran 343 tests green, including `container_escapes` 6/6
+(16.4 s) and `container_toolchain` 2/2 (27.9 s, the contained build included), and the
+`bollo-api` step every earlier run skipped ran as well. The uploaded artifact
+(`target/ci-diag-5510f1a/container-diagnostics.json`) shows the device as the container
+sees it during that run:
+
+```text
+D:AI(A;;0x12019f;;;S-1-15-2-1481562974-3594665710-2728146993-1545473162-2872381973-2088545254-302662887)(A;;0x1201bf;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;RC)
+```
+
+Exactly one ACE was added — `0x12019f`, the `NUL_RIGHTS` the code names, for that
+container's own SID — in front of the four the image ships, and every NUL open the
+container tries reads `ok` where the same capture read denials before. Containment is
+unchanged by it: `raw_appname_breakaway` and the named-pipe probe still fail in the same
+run's process matrix.
+
 The same evidence, reproduced on demand instead of transcribed: `scripts/containment_evidence.py`
 runs the escape suite and the contained link proof, one test at a time, and prints the block below
-(it also writes it to `target/containment-evidence/evidence.md`). Local run at the commit that
-added the tool:
+(it also writes it to `target/containment-evidence/evidence.md`). Local run at the fixing
+revision:
 
-### Containment evidence — 2026-10-05 21:04:46Z — local — `eeeff3c`
+### Containment evidence — 2026-10-07 18:21:30Z — local — `5510f1a`
 
 One command, from the repository root:
 
@@ -247,24 +267,23 @@ numbers are the times libtest reports for the test itself.
 
 | Phase | Tests | Result | Wall clock |
 | --- | --- | --- | --- |
-| Build test binaries | — | ok | 0.2 s |
-| escape suite (`container_escapes`) | 6/6 passed | ok | 41.6 s |
-| contained link proof (`container_toolchain`) | 2/2 passed | ok | 35.2 s |
-| **Total** | **8/8 passed** | **ok** | **76.9 s** |
+| Build test binaries | — | ok | 5.1 s |
+| escape suite (`container_escapes`) | 6/6 passed | ok | 42.5 s |
+| contained link proof (`container_toolchain`) | 2/2 passed | ok | 35.4 s |
+| **Total** | **8/8 passed** | **ok** | **83.1 s** |
 
 Per test (own libtest time, then the enclosing `cargo test` wall clock):
 
 | Test | Result | Test time | cargo wall |
 | --- | --- | --- | --- |
-| `container_escapes::alternate_data_streams_outside_the_grant_are_denied` | ok | 2.5 s | 2.7 s |
-| `container_escapes::contained_runs_leave_no_surviving_process_tree` | ok | 17.6 s | 17.8 s |
-| `container_escapes::foreign_inheritable_handles_do_not_cross_into_the_container` | ok | 12.7 s | 12.9 s |
-| `container_escapes::junction_escape_write_is_denied` | ok | 2.6 s | 2.8 s |
-| `container_escapes::rename_across_the_grant_boundary_is_denied` | ok | 2.5 s | 2.7 s |
-| `container_escapes::symlink_escape_write_is_denied` | ok | 2.6 s | 2.8 s |
-| `container_toolchain::contained_cargo_builds_with_host_toolchain_grants` | ok | 32.1 s | 32.3 s |
-| `container_toolchain::credential_stores_stay_outside_every_grant` | ok | 2.7 s | 2.9 s |
+| `container_escapes::alternate_data_streams_outside_the_grant_are_denied` | ok | 3.0 s | 3.2 s |
+| `container_escapes::contained_runs_leave_no_surviving_process_tree` | ok | 18.4 s | 18.6 s |
+| `container_escapes::foreign_inheritable_handles_do_not_cross_into_the_container` | ok | 12.6 s | 12.8 s |
+| `container_escapes::junction_escape_write_is_denied` | ok | 2.5 s | 2.7 s |
+| `container_escapes::rename_across_the_grant_boundary_is_denied` | ok | 2.4 s | 2.6 s |
+| `container_escapes::symlink_escape_write_is_denied` | ok | 2.5 s | 2.7 s |
+| `container_toolchain::contained_cargo_builds_with_host_toolchain_grants` | ok | 32.5 s | 32.6 s |
+| `container_toolchain::credential_stores_stay_outside_every_grant` | ok | 2.6 s | 2.8 s |
 
-The block above is the host-side baseline the runner's denial was read against; with the
-device grant in place the runner exercises the same two suites through the same code path,
-and the job's own result is what confirms it.
+The block above is the same two suites on this host at the fixing revision; the runner ran
+them through the same code path and is green in `37665222287`.
