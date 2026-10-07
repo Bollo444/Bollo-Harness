@@ -232,9 +232,9 @@ matches the pre-perturbation capture in `target/container-diagnostics-local.json
 intermediate write had also set `SE_DACL_AUTO_INHERITED`, which the restore drops).
 
 On the runner the same proof passes, and the capture says what it took. `37665222287` at
-`5510f1a`: the workspace step ran 343 tests green, including `container_escapes` 6/6
+`5510f1a`: the workspace step ran 312 tests green, including `container_escapes` 6/6
 (16.4 s) and `container_toolchain` 2/2 (27.9 s, the contained build included), and the
-`bollo-api` step every earlier run skipped ran as well. The uploaded artifact
+`bollo-api` step every earlier run skipped ran too (31 more — 343 in the job). The uploaded artifact
 (`target/ci-diag-5510f1a/container-diagnostics.json`) shows the device as the container
 sees it during that run:
 

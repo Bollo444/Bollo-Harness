@@ -1,6 +1,9 @@
-# CLI reference (proposed, not executable yet)
+# CLI reference (contract; the MVP subset is executable)
 
-BH-001/011/012. All examples are future commands. **No `bollo` binary exists in this repository.**
+BH-001/011/012. The command and flag surface below is the contract. The MVP subset runs
+today as `bollo` — [getting started](../getting-started.md) records the verified surface
+and `bollo <command> --help` is the built binary's own help — while the sections that
+name P2 commands stay proposals.
 
 ## MVP commands
 
@@ -41,7 +44,7 @@ Headless supports `--prompt TEXT` or `--prompt-file PATH` (mutually exclusive),
 validation; stdin support is a later compatibility choice, not assumed here.
 
 ```sh
-# Proposed examples, not runnable today:
+# Examples; provider, model and configuration come from the trusted user configuration:
 bollo --workspace ./project --profile balanced
 bollo run --workspace ./project --profile read_only --prompt "Explain this repository"
 bollo run --profile workspace_auto --sandbox workspace --output ndjson   --prompt "Fix the parser; run the tests"

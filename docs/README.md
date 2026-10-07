@@ -1,13 +1,17 @@
 # Documentation atlas
 
-**Bollo Harness · design baseline v0.1 · 2026-10-03**
+**Bollo Harness · design baseline v0.1 · 2026-10-07**
 
-This is a documentation/design package, not a working application. All Bollo behavior
-is proposed; upstream facts are pinned or attributed; unknowns are explicitly recorded.
-Start with the **[project blueprint](BLUEPRINT.md)**.
+The design package and the MVP implementation live together here: the Rust workspace
+implements BH-001…BH-016 and CI is green, while these documents still describe the
+whole proposal, including parts that are not built. Upstream facts are pinned or
+attributed; unknowns and boundaries are explicitly recorded. To build, run and test
+the binary, start with **[getting started](getting-started.md)**; for the design, the
+**[project blueprint](BLUEPRINT.md)**.
 
 ## Reading routes
 
+- **New here / trying it:** getting-started → HARNESS_SPEC → permissions → validation.
 - **Owner/product:** blueprint → vision → PRD → MVP → wireframes → decision log → MPP.
 - **Engineer:** research comparison → system design → runtime → policy → contracts → testing.
 - **Security reviewer:** provenance → permissions → threat model → privacy → recovery → release.
@@ -27,6 +31,10 @@ prose and UX together. The validator checks structural alignment; human review s
 owns semantic consistency.
 
 ## Complete document and artifact index
+
+### Start here
+
+- [Getting started](getting-started.md) — build, test, first offline run, exit codes, refusals and limits
 
 ### Conversation archive
 

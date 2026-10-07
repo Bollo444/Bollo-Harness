@@ -2,7 +2,12 @@
 
 **A documentation-first blueprint for a customizable, provider-neutral coding-agent CLI.**
 
-Status: **design proposal v0.1 · 2026-10-03 · no harness application implemented**.
+Status: **MVP harness implemented (BH-001…BH-016), Windows-first · 2026-10-07**. CI is
+green on `main`: the Windows workflow runs 343 tests, the container escape suite and a
+contained `cargo build` link proof, and publishes its own [containment
+evidence](docs/delivery/validation.md) as a run artifact. The documents below still
+describe the wider proposal, including parts that are not built; what runs today, and
+how to try it in five minutes, is in **[getting started](docs/getting-started.md)**.
 
 Bollo combines workflow ideas documented by Claude Code with engineering patterns
 studied in official Grok Build. The independent community Grok CLI is a supplementary
@@ -48,9 +53,16 @@ The toolchain is pinned in `rust-toolchain.toml` (1.93.1 MSVC), the same
 compiler the Windows workflow installs, so a local run and a CI run agree.
 
 ```sh
-cargo build --workspace            # clean, no warnings
-cargo test  --workspace            # 335 tests: unit, contract, policy fixtures, loop, recovery, MCP gate, API, classifier, Windows containment, escape attempts + toolchain read grants
+cargo build --workspace --locked                                     # clean, no warnings
+cargo test  --workspace --exclude bollo-api --locked --no-fail-fast  # 312 tests
+cargo test  -p bollo-api --locked --no-fail-fast -- --test-threads=1 # 31 tests
 ```
+
+Covering the unit and contract suites, policy fixtures, the loop and recovery, the MCP
+gate, the loopback API, the classifier, Windows containment, the escape attempts and
+the toolchain read grants. [Getting started](docs/getting-started.md) walks through a
+first run, including the trusted configuration a fresh machine needs before the first
+request is allowed.
 
 The containment evidence has one command of its own — the escape suite and the
 contained link proof, one test at a time, printed as a paste-ready timing block:
