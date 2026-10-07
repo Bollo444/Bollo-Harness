@@ -446,9 +446,14 @@ first-class test doubles, not mocks of the code under test.
   every child spawn, and that image's NUL device DACL grants nothing to
   Application Packages (this host's grants `AC` and `S-1-15-2-2`), so every
   contained std-mediated spawn was denied there while raw broker spawns and
-  the escape suite were unaffected. A contained build therefore needs a host
-  whose NUL device admits the container; the validation log records the
-  capture.
+  the escape suite were unaffected. The workspace container now answers it
+  directly: it checks the device when it is built, writes one non-inheritable
+  ACE for its own SID where nothing covers the device (the runner's case) and
+  revokes it with the run's other grants, and the link proof asserts the
+  recorded answer — so a contained build no longer depends on a host property
+  the harness cannot supply, and a host that refuses the write names that
+  instead of failing inside cargo. The validation log records the capture and
+  the local reduction to both outcomes.
 - Live provider HTTP: adapters are implemented against a `Transport` trait with a
   deterministic fake used by all tests; the real HTTPS transport is feature-gated
   and disabled by default in CI terms.

@@ -147,11 +147,17 @@ only an allowlist of location and tool-identity variables (`PATH`, `LIB`,
 `INCLUDE`, `VCINSTALLDIR`, the version strings — never a credential), and
 contained children receive them so rustc finds the real linker; the MSVC and
 SDK trees are read through the Application Packages ACE a normal installation
-already carries. One host property is needed rather than granted: Rust's std
-opens the NUL device for stdin on every spawn, so contained std-mediated
-spawns (what `cargo` uses to start `rustc`) fail where the device DACL
-excludes app packages — measured on the hosted runner, where the escape
-suite and raw broker spawns still pass.
+already carries. Rust's std opens the NUL device for stdin on every spawn, so a
+contained std-mediated spawn (what `cargo` uses to start `rustc`) needs the
+device to admit the container: the Windows backend checks the device when it
+builds a container and, where no Application Packages entry covers it
+(measured on the hosted runner), writes one non-inheritable ACE for the
+container's own SID — the run's only grant that needs `WRITE_DAC` on a host
+device, which the runner's administrator test user has — keeps the answer, and
+revokes the ACE with the rest of the run's grants. Where the device already
+carries the ACE (this host) nothing is written, and a host that refuses the
+write fails the link proof naming the requirement instead of hiding the
+boundary.
 
 Backend choice (e.g. Linux namespaces/bubblewrap with appropriate kernel controls) is
 an architecture spike, not already implemented. Sensitive paths must be inaccessible

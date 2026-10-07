@@ -28,9 +28,9 @@ use windows_sys::Win32::Foundation::{
 };
 
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW,
-    EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS, SE_FILE_OBJECT,
-    TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    ConvertSidToStringSidW, ConvertStringSidToSidW, GetNamedSecurityInfoW, SetEntriesInAclW,
+    SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS,
+    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile,
@@ -77,6 +77,24 @@ const READ_EXECUTE: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 /// rename a file over an existing target).
 const MODIFY_RIGHTS: u32 =
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+
+/// The device Rust's std opens for a child's stdin whenever a spawn asks for
+/// null stdio (`Stdio::null()`, and `Command::output()`, which nulls stdin so a
+/// child cannot read the parent's). The open is issued by the process that
+/// spawns, so a *contained* process needs the device reachable from inside the
+/// container: a contained `cargo` asks for it immediately, probing `rustc -vV`
+/// through `output()`, and a contained `cmd` asks for it too.
+const NUL_DEVICE: &str = r"\\.\NUL";
+
+/// Rights a null-stdio open needs: `FILE_GENERIC_READ` for stdin and
+/// `FILE_GENERIC_WRITE` for stdout/stderr. Both include `SYNCHRONIZE`.
+const NUL_RIGHTS: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE;
+
+/// The well-known AppContainer SIDs a lowbox access check also matches: ALL
+/// APPLICATION PACKAGES (`S-1-15-2-1`) and ALL RESTRICTED APPLICATION PACKAGES
+/// (`S-1-15-2-2`). A host whose device already names either one (the Windows 11
+/// default) needs no entry for this container.
+const ANY_PACKAGE_SIDS: [&str; 2] = ["S-1-15-2-1", "S-1-15-2-2"];
 
 /// Capability shared by every workspace run on this host: the read grants on
 /// the Rust toolchain and package caches. It is stable across runs, so the
@@ -186,6 +204,10 @@ pub struct AppContainer {
     sid_string: String,
     capabilities: Vec<CapabilitySet>,
     grants: Vec<PathBuf>,
+    /// What [`AppContainer::grant_null_device`] did, recorded for evidence:
+    /// `None` until it runs, `Ok(GrantOutcome)` with either answer, or the
+    /// error that stopped it.
+    null_device: Option<Result<GrantOutcome, String>>,
 }
 
 impl AppContainer {
@@ -216,6 +238,7 @@ impl AppContainer {
             sid_string,
             capabilities: Vec::new(),
             grants: Vec::new(),
+            null_device: None,
         })
     }
 
@@ -242,6 +265,11 @@ impl AppContainer {
             .push(CapabilitySet::derive(&workspace_capability_name(
                 &canonical,
             ))?);
+        // Recorded rather than fatal: a container the NUL device refuses can
+        // still be built and run, it just cannot spawn a child that asks for
+        // null stdio. The workspace tests assert the recorded answer instead of
+        // leaving the difference to be guessed from a contained tool's error.
+        container.null_device = Some(container.grant_null_device());
         Ok(container)
     }
 
@@ -255,6 +283,37 @@ impl AppContainer {
             .iter()
             .flat_map(|set| set.strings().iter().cloned())
             .collect()
+    }
+
+    /// Make the NUL device reachable from inside the container, once, and
+    /// report what that took.
+    ///
+    /// [`NUL_DEVICE`] is not a tree like a toolchain grant: it is where Rust's
+    /// std sends a child's stdin when a spawn asks for null stdio, and the open
+    /// is issued by the *contained* process when it spawns a child of its own.
+    /// A host whose device DACL names an Application Packages SID (the Windows
+    /// 11 default) needs nothing. A host whose DACL names only the machine's own
+    /// principals gets one non-inheritable ACE for this container's per-run SID,
+    /// recorded in `grants` and revoked on drop. The device discards writes and
+    /// reports end-of-file, so the ACE carries no data and no authority.
+    ///
+    /// Extending a device DACL needs `WRITE_DAC` on it, so a host that both
+    /// denies Application Packages and runs the harness unelevated cannot be
+    /// contained and buildable at once; it is named here instead of surfacing
+    /// later as an opaque `Access is denied` from a contained `cargo`.
+    pub fn grant_null_device(&mut self) -> Result<GrantOutcome, String> {
+        let outcome = ensure_null_access(Path::new(NUL_DEVICE), self.sid)?;
+        if !outcome.already_granted {
+            self.grants.push(outcome.root.clone());
+        }
+        Ok(outcome)
+    }
+
+    /// What [`AppContainer::grant_null_device`] did, or the error that stopped
+    /// it. `None` until it runs: [`AppContainer::create_workspace`] runs it,
+    /// [`AppContainer::create`] does not.
+    pub fn null_device(&self) -> Option<&Result<GrantOutcome, String>> {
+        self.null_device.as_ref()
     }
 
     fn capability(&self, index: usize) -> Result<&CapabilitySet, String> {
@@ -1031,6 +1090,76 @@ fn grant_root(root: &Path, sids: &[PSID], rights: u32) -> Result<GrantOutcome, S
     })
 }
 
+/// Ensure `device` admits the container's token for null stdio: check first,
+/// and write exactly one non-inheritable ACE for `sid` when nothing covers it.
+fn ensure_null_access(device: &Path, sid: PSID) -> Result<GrantOutcome, String> {
+    if null_access_granted(device, sid)? {
+        return Ok(GrantOutcome {
+            root: device.to_path_buf(),
+            already_granted: true,
+        });
+    }
+    set_access(device, sid, GRANT_ACCESS, NUL_RIGHTS, NO_INHERITANCE).map_err(|err| {
+        format!(
+            "{} admits no Application Packages SID and could not be granted to this \
+             container: {err} (extending a device DACL needs WRITE_DAC, so the harness \
+             must run elevated on this host, or {NUL_DEVICE} must grant {} itself)",
+            device.display(),
+            ANY_PACKAGE_SIDS[0],
+        )
+    })?;
+    Ok(GrantOutcome {
+        root: device.to_path_buf(),
+        already_granted: false,
+    })
+}
+
+/// True when the container's token already reaches `path` for null stdio:
+/// either this container's own SID or a well-known Application Packages SID
+/// carries the rights on the object itself.
+fn null_access_granted(path: &Path, sid: PSID) -> Result<bool, String> {
+    let mut trustees: Vec<Vec<u8>> = vec![sid_bytes(sid)];
+    for text in ANY_PACKAGE_SIDS {
+        trustees.push(sid_from_string(text)?);
+    }
+    read_dacl(path, |dacl| {
+        trustees.iter().any(|bytes| unsafe {
+            acl_contains(
+                dacl,
+                bytes.as_ptr() as PSID,
+                ACCESS_ALLOWED_ACE_TYPE as u8,
+                NUL_RIGHTS,
+                false,
+            )
+        })
+    })
+}
+
+/// Copy a SID's bytes, so the borrow of the caller's SID stays out of the DACL
+/// closure.
+fn sid_bytes(sid: PSID) -> Vec<u8> {
+    let length = unsafe { GetLengthSid(sid) } as usize;
+    unsafe { std::slice::from_raw_parts(sid as *const u8, length).to_vec() }
+}
+
+/// A SID from its string form. `ConvertStringSidToSidW` allocates the SID with
+/// `LocalAlloc`; the bytes are copied out and the allocation freed here.
+fn sid_from_string(text: &str) -> Result<Vec<u8>, String> {
+    let text_wide = wide(text);
+    let mut sid: PSID = std::ptr::null_mut();
+    let converted = unsafe { ConvertStringSidToSidW(text_wide.as_ptr(), &mut sid) };
+    if converted == 0 || sid.is_null() {
+        return Err(format!("ConvertStringSidToSidW({text}): {}", unsafe {
+            GetLastError()
+        }));
+    }
+    let bytes = sid_bytes(sid);
+    unsafe {
+        LocalFree(sid as *mut c_void);
+    }
+    Ok(bytes)
+}
+
 /// Read `path`'s DACL and hand it to `inspect`; the security descriptor is
 /// freed afterwards, so the pointer must not escape.
 fn read_dacl<T>(path: &Path, inspect: impl FnOnce(*const ACL) -> T) -> Result<T, String> {
@@ -1385,5 +1514,128 @@ mod tests {
         ));
         assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
         assert!(inside.is_file());
+    }
+
+    /// Replace `path`'s DACL with one protected ACE for `trustee`, so the
+    /// fixture carries exactly what the runner-measured device carries and
+    /// nothing else: no inherited entry survives the write. The owner keeps
+    /// `WRITE_DAC`, so the same write reverses it without elevation.
+    fn set_protected_dacl(path: &Path, trustee: &str, mask: u32) -> Result<(), String> {
+        let sid = sid_from_string(trustee)?;
+        let entry = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: mask,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: NO_INHERITANCE,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: sid.as_ptr() as *mut u16,
+            },
+        };
+        let mut acl: *mut ACL = std::ptr::null_mut();
+        let built = unsafe { SetEntriesInAclW(1, &entry, std::ptr::null(), &mut acl) };
+        if built != 0 {
+            return Err(format!("SetEntriesInAclW({trustee}): {built}"));
+        }
+        let path_wide = wide(&path.to_string_lossy());
+        // `PROTECTED`: the replaced DACL inherits nothing, which is how a
+        // fixture reproduces a device that grants no Application Packages.
+        const PROTECTED: u32 = 0x8000_0000;
+        let applied = unsafe {
+            SetNamedSecurityInfoW(
+                path_wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                acl,
+                std::ptr::null(),
+            )
+        };
+        unsafe { LocalFree(acl as *mut c_void) };
+        if applied != 0 {
+            return Err(format!("SetNamedSecurityInfoW({trustee}): {applied}"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn null_access_is_granted_when_no_application_packages_entry_covers_the_child() {
+        let roots = Roots::new("null-grant");
+        let container = AppContainer::create().unwrap();
+        let target = roots.granted.join("null-target");
+        std::fs::write(&target, b"placeholder").unwrap();
+        // The runner-measured device shape: `Everyone` carries the rights and
+        // the container still cannot open it, because a lowbox token is not
+        // covered by an ACE that names `Everyone`.
+        set_protected_dacl(&target, "S-1-1-0", NUL_RIGHTS | DELETE).unwrap();
+        assert!(!null_access_granted(&target, container.sid).unwrap());
+
+        let outcome = ensure_null_access(&target, container.sid).unwrap();
+        assert!(!outcome.already_granted);
+        assert_eq!(outcome.root, target);
+        assert!(null_access_granted(&target, container.sid).unwrap());
+        // The grant is one ACE for this container's own SID, and revoking it
+        // (what `Drop` does) puts the object back to denying the container.
+        assert!(container.sid_string().starts_with("S-1-15-2-"));
+        set_access(&target, container.sid, REVOKE_ACCESS, 0, NO_INHERITANCE).unwrap();
+        assert!(!null_access_granted(&target, container.sid).unwrap());
+    }
+
+    #[test]
+    fn null_access_is_left_alone_when_application_packages_already_have_it() {
+        let roots = Roots::new("null-already");
+        let container = AppContainer::create().unwrap();
+        let target = roots.granted.join("null-target");
+        std::fs::write(&target, b"placeholder").unwrap();
+        // This host's shape: the Application Packages SID carries the rights.
+        set_protected_dacl(&target, "S-1-15-2-1", NUL_RIGHTS | DELETE).unwrap();
+
+        let outcome = ensure_null_access(&target, container.sid).unwrap();
+        assert!(outcome.already_granted);
+        assert!(null_access_granted(&target, container.sid).unwrap());
+        assert!(
+            !read_dacl(&target, |dacl| unsafe {
+                acl_contains(
+                    dacl,
+                    container.sid,
+                    ACCESS_ALLOWED_ACE_TYPE as u8,
+                    NUL_RIGHTS,
+                    false,
+                )
+            })
+            .unwrap(),
+            "a covered container must not get an ACE of its own"
+        );
+    }
+
+    #[test]
+    fn workspace_container_records_its_null_device_answer() {
+        let roots = Roots::new("null-record");
+        let container = AppContainer::create_workspace(&roots.root).unwrap();
+        let recorded = container
+            .null_device()
+            .expect("a workspace container records the NUL device check");
+        println!("NUL device: {recorded:?}");
+        assert!(
+            recorded
+                .as_ref()
+                .map(|outcome| outcome.root == Path::new(NUL_DEVICE))
+                .unwrap_or(false),
+            "the record must name the device it checked: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn bare_container_leaves_the_null_device_unrecorded() {
+        let mut container = AppContainer::create().unwrap();
+        assert!(container.null_device().is_none());
+        // The real device is still checkable on demand; the answer is returned
+        // to the caller and only `create_workspace` keeps it.
+        let answer = container.grant_null_device();
+        println!("{NUL_DEVICE}: {answer:?}");
+        assert!(container.null_device().is_none());
     }
 }

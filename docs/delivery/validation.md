@@ -157,7 +157,7 @@ runner. It passes locally single-threaded (18/18) plus 13 crate unit tests.
   `d6485f3` the save step is gated on `cache-hit != 'true'` and is skipped on an exact hit
   (`37268300605`, `37315185806`, `37315792636`).
 
-### Open failure (explained)
+### Contained-build failure (closed)
 
 The contained-build test fails only on the runner. Its old probes were misleading on both
 hosts: `where rustc` fails because `PATHEXT` is not part of the environment allowlist, and a
@@ -198,9 +198,35 @@ AppContainer on the runner image that open is denied, so `cargo` cannot execute 
 (`could not execute process 'rustc -vV' (never executed)`), while the harness's own raw
 broker spawns — which never open the device — work, and the escape suite stays 6/6.
 Containment is intact; the contained *build* depends on a host device the image withholds
-from AppContainers. The job stays red until a host-independent answer is chosen (granting
-the device, or a contained spawn path that does not need NUL); the test is not weakened to
-hide the boundary.
+from AppContainers, and the workspace container now supplies that access itself rather than
+requiring the host to. `AppContainer::create_workspace` checks the NUL device for the
+container it has just built (the two Application Packages SIDs, plus that container's own)
+and, where nothing covers the device — the runner's case — writes **one non-inheritable
+ACE** (`FILE_GENERIC_READ | FILE_GENERIC_WRITE`) for the container's own SID, recording the
+path on the run's grant list so the existing revoke-on-drop removes it with everything else.
+The check comes first, so a host whose device already carries the Application Packages ACE
+sees no write (this host reports the device already covered), and the answer is kept
+(`AppContainer::null_device`) instead of discarded. The link proof reads that record and
+fails loudly — `the container cannot reach the NUL device: …`, or `the workspace container
+did not check the NUL device` — so a host that refuses the write is named rather than
+surfacing as cargo's own error, and no pre-existing assertion was relaxed.
+
+What the fix leaves is one permission, not a leaked boundary: writing the ACE needs
+`WRITE_DAC` on the device object, which the hosted runner's administrator test user has and
+a host whose device already admits Application Packages never exercises.
+
+The failure was reduced locally rather than argued. With this host's device set to the
+runner shape `D:AI(A;;0x1201bf;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;RC)`, the link
+proof failed here exactly as on the runner — exit 101, `container rustc --version:
+exit=Some(1)`, `could not execute process 'rustc -vV' (never executed)`, panicking at
+`crates\bollo-workspace\tests\container_toolchain.rs:258` (`target/nul-restrict.log`) — and
+the same command at the fixing revision, under the same restricted device, passes: **exit 0,
+`1 passed`, 33.15 s**. The unrestricted host passes that test unchanged and this device shape
+failed it before the change, so that run necessarily took the write path. The device was put
+back afterwards: the restored descriptor
+`D:(A;;0x1201bf;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x1200a9;;;RC)(A;;0x1201bf;;;AC)(A;;0x1201bf;;;S-1-15-2-2)`
+matches the pre-perturbation capture in `target/container-diagnostics-local.json` (the
+intermediate write had also set `SE_DACL_AUTO_INHERITED`, which the restore drops).
 
 The same evidence, reproduced on demand instead of transcribed: `scripts/containment_evidence.py`
 runs the escape suite and the contained link proof, one test at a time, and prints the block below
@@ -239,5 +265,6 @@ Per test (own libtest time, then the enclosing `cargo test` wall clock):
 | `container_toolchain::contained_cargo_builds_with_host_toolchain_grants` | ok | 32.1 s | 32.3 s |
 | `container_toolchain::credential_stores_stay_outside_every_grant` | ok | 2.7 s | 2.9 s |
 
-On the runner the escape suite passes the same way and the link proof fails, so the block above
-is the host-side baseline its denial is read against.
+The block above is the host-side baseline the runner's denial was read against; with the
+device grant in place the runner exercises the same two suites through the same code path,
+and the job's own result is what confirms it.

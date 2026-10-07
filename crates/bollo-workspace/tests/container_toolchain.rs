@@ -94,6 +94,17 @@ fn contained_cargo_builds_with_host_toolchain_grants() {
     std::fs::create_dir_all(&workspace).unwrap();
 
     let mut container = AppContainer::create_workspace(&workspace).unwrap();
+    // A container that cannot open the NUL device cannot spawn any child that
+    // asks for null stdio, and Rust's std asks for exactly that on every
+    // `Command::output()` -- the first thing a contained `cargo` does is probe
+    // `rustc -vV` that way. The container records what the check had to do, so
+    // a host that refuses the device is named here instead of leaving the
+    // failure to be read out of cargo's own error.
+    match container.null_device() {
+        Some(Ok(outcome)) => println!("NUL device grant: {outcome:?}"),
+        Some(Err(err)) => panic!("the container cannot reach the NUL device: {err}"),
+        None => panic!("the workspace container did not check the NUL device"),
+    }
     let access = toolchain_access();
     assert!(
         !access.read_roots.is_empty(),
