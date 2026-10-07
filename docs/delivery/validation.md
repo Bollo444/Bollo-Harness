@@ -292,3 +292,42 @@ Per test (own libtest time, then the enclosing `cargo test` wall clock):
 
 The block above is the same two suites on this host at the fixing revision; the runner ran
 them through the same code path and is green in `37665222287`.
+
+The runner now publishes its own block instead of leaving it to a transcription. The push
+after that one (`6ba15e6`) ran the same command as a step of its own — after the test steps,
+`if: always()`, never gating the job — appended the block to the job summary and uploaded it
+as the `containment-evidence` artifact (`37668383539`, 923 B, 59 s). Downloaded from that
+artifact and pasted unedited:
+
+
+### Containment evidence — 2026-10-07 18:43:18Z — ci — `6ba15e6` — [run 37668383539](https://github.com/Bollo444/Bollo-Harness/actions/runs/37668383539)
+
+One command, from the repository root:
+
+```sh
+python scripts/containment_evidence.py
+```
+
+Toolchain: `rustc 1.93.1 (01f6ddf75 2026-02-11) / host: x86_64-pc-windows-msvc`. Each test runs through its own `cargo test`,
+single-threaded, so the phase numbers are the gate CI runs and the per-test
+numbers are the times libtest reports for the test itself.
+
+| Phase | Tests | Result | Wall clock |
+| --- | --- | --- | --- |
+| Build test binaries | — | ok | 1.1 s |
+| escape suite (`container_escapes`) | 6/6 passed | ok | 26.0 s |
+| contained link proof (`container_toolchain`) | 2/2 passed | ok | 29.3 s |
+| **Total** | **8/8 passed** | **ok** | **56.5 s** |
+
+Per test (own libtest time, then the enclosing `cargo test` wall clock):
+
+| Test | Result | Test time | cargo wall |
+| --- | --- | --- | --- |
+| `container_escapes::alternate_data_streams_outside_the_grant_are_denied` | ok | 1.8 s | 2.0 s |
+| `container_escapes::contained_runs_leave_no_surviving_process_tree` | ok | 16.7 s | 16.9 s |
+| `container_escapes::foreign_inheritable_handles_do_not_cross_into_the_container` | ok | 1.7 s | 1.8 s |
+| `container_escapes::junction_escape_write_is_denied` | ok | 1.6 s | 1.8 s |
+| `container_escapes::rename_across_the_grant_boundary_is_denied` | ok | 1.6 s | 1.7 s |
+| `container_escapes::symlink_escape_write_is_denied` | ok | 1.6 s | 1.8 s |
+| `container_toolchain::contained_cargo_builds_with_host_toolchain_grants` | ok | 27.3 s | 27.4 s |
+| `container_toolchain::credential_stores_stay_outside_every_grant` | ok | 1.8 s | 1.9 s |
