@@ -152,9 +152,9 @@ evidence; the AT-xxx acceptance tests it names remain planned.
 
 - `packaging/` (release manifests, checksums, SBOM) and a dedicated
   `bollo-providers/src/credentials.rs` module.
-- The API crate is a dependency of `bollo-cli` and started by `bollo serve` (holding
-  `UnavailableBackend` until the P2 runtime bridge wires real execution); remote access
-  stays out of scope.
+- The API crate is a dependency of `bollo-cli` and started by `bollo serve`, whose
+  P2 runtime bridge (`CliRunBackend`) executes API-created runs on worker threads
+  with the approved-by-API approval gate; remote access stays out of scope.
 - Finer file splits from the earlier proposal that the implementation keeps in one module:
   the tool registry lives in `bollo-tools/src/lib.rs`, the SQLite store in
   `bollo-store/src/lib.rs`, doctor and headless output in

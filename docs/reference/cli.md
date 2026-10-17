@@ -97,9 +97,13 @@ same durable store the CLI uses. Contract:
 - One bearer token is generated at startup and printed exactly once as
   `BOLLO_TOKEN=<secret>`. It is never stored or logged again; a client that forgets it
   must restart the daemon. Every route, including `/v1/health`, requires it.
-- Runs through the endpoint decline loudly with a `no run backend is configured` error
-  until the P2 runtime bridge is wired: `bollo serve` never executes a run without the
-  explicit composition-root bridge.
+- API-created runs execute the CLI runtime on a worker thread: the bridge rebuilds
+  the composition from the daemon's own trusted configuration, adopts the API-minted
+  run row (one truthful durable record), fans journal events to live SSE subscribers,
+  and parks on `Effect::ask` approvals until `POST /v1/approvals/{id}/decision`
+  answers. An unanswered approval denies at the receipt TTL, never defaults to yes.
+  An exec-capable daemon still requires the operator's explicit
+  `--acknowledge-risk`, exactly as the headless path does.
 - Ctrl-C stops the daemon and maps to exit 130, the same contract as a run.
 
 ## Later commands

@@ -6,6 +6,34 @@ verified (the command and its result, not an intention), and what is still open.
 [decision log](decisions/decision-log.md) holds the choices; this page holds the narrative
 that connects them, so none of it lives only in a chat transcript.
 
+## 2026-10-17 — the P2 run bridge: `bollo serve` executes real runs
+
+**What:** the P2 runtime bridge shipped. `bollo serve` installs `CliRunBackend` as its
+`RunBackend` (composition.rs): each API created-run rebuilds the composition from the
+daemon's own trusted configuration on a worker thread and drives the same bounded loop
+the headless path uses. Two correctness seams were built rather than patched around.
+First, one truthful run record: `Runtime::with_run_id` lets the runtime adopt the
+API-minted durable row instead of calling `start_run` again — before this, every run
+was double-rows and duplicate events (two ids per event on the stream).
+Second, journal identity: the runtime's own store writes the shared SQLite journal, so
+the bridge's sink only fans the already-durable envelope to live SSE subscribers
+(`state.publish_event`, the publish-only half of `append_event`) — before this, the
+bridge re-appended and the store double-wrote. Approvals ride `Effect::ask`: the
+worker's `ApiApprovalChannel` mirrors the pending receipt into the daemon's approval
+view, parks on a decision route wakeup (`park_approval_waiter`/`wake_approval`), and
+denies at the receipt TTL — never defaults to yes.
+**Verified:** end-to-end through the real binary and daemon (crates/bollo-cli/tests/
+serve_run.rs): `api_run_executes_the_cli_runtime_and_approves_through_the_api`
+(bearer still 401s, session/run 202, approval surfaces on SSE, decision route wakes
+the worker, run completes and the approved write lands in the workspace, foreign
+session 404s) and `api_run_denied_by_decision_completes_without_the_effect` (deny
+decision, refused effect, approval.resolved shows deny) — both green; plus
+`cargo test -p bollo-api --test http` 18/18 and the workspace suite (re-run below).
+The true no-decision expiry path (the full 300 s TTL) runs opt-in as `--ignored`.
+**Open:** the AT-017 OpenAPI/SSE conformance run remains unexecuted; a cancelled-run
+worker path on the bridge is wired through the token map but not yet covered by an
+end-to-end test.
+
 ## 2026-10-17 — retention enforcement, `bollo serve`, and the ratified ratatui port
 
 **What:** three backlog items shipped in one stretch. BH-016 turned the privacy contract

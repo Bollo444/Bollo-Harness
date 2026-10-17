@@ -10,7 +10,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use bollo_protocol::vocab::{ModeKind, Profile, SandboxMode};
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(
     name = "bollo",
     version,
@@ -73,7 +73,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Headless run: one request, then exit (stdout carries only the output format)
     Run(RunArgs),
@@ -106,7 +106,7 @@ pub enum Command {
     Checkpoint(CheckpointArgs),
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct RunArgs {
     #[arg(long, value_name = "TEXT", conflicts_with = "prompt_file")]
     pub prompt: Option<String>,
@@ -126,7 +126,7 @@ pub struct RunArgs {
     pub resume_last: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ResumeArgs {
     /// Session id to resume (see `bollo sessions list`)
     #[arg(value_name = "SESSION_ID")]
@@ -146,13 +146,13 @@ pub struct ResumeArgs {
     pub acknowledge_unknown: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct SessionsArgs {
     #[command(subcommand)]
     pub command: SessionsCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum SessionsCommand {
     /// List local sessions in this state directory
     List,
@@ -182,13 +182,13 @@ pub enum SessionsCommand {
     },
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct RunsArgs {
     #[command(subcommand)]
     pub command: RunsCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum RunsCommand {
     /// List durable run records, newest first (read-only; no API required)
     List {
@@ -198,13 +198,13 @@ pub enum RunsCommand {
     },
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct PolicyArgs {
     #[command(subcommand)]
     pub command: PolicyCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum PolicyCommand {
     /// Effective profile, sandbox, limits and rules with provenance
     Show,
@@ -215,45 +215,45 @@ pub enum PolicyCommand {
     },
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub command: ConfigCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum ConfigCommand {
     /// Parse and validate the trusted user and project configuration
     Validate,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct McpArgs {
     #[command(subcommand)]
     pub command: McpCommand,
 }
 
 /// The local API daemon: loopback only, bearer-token authenticated.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, Clone, clap::Args)]
 pub struct ServeArgs {
     /// Loopback bind address, `IP:PORT` (defaults to an ephemeral port)
     #[arg(long, value_name = "ADDR", default_value = None)]
     pub bind: Option<String>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum McpCommand {
     /// Configured servers; starting any server requires explicit trust
     List,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct CheckpointArgs {
     #[command(subcommand)]
     pub command: CheckpointCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub enum CheckpointCommand {
     /// Recorded checkpoints for a session (defaults to the most recent session)
     List {

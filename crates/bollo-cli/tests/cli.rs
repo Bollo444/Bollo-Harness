@@ -850,6 +850,7 @@ fn interactive_session_drives_the_real_runtime() {
         session,
         mode: ModeKind::Build,
         include_claude_md: false,
+        run: None,
     };
 
     let terminal = Terminal::new(

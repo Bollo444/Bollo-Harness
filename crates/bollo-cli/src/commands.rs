@@ -5,8 +5,6 @@
 use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::path::PathBuf;
-
-use bollo_api::backend::UnavailableBackend;
 use bollo_api::{state::ApiConfig, ApiLimits, ApiServer, ApiToken, Capability, RunBackend};
 use bollo_core::{ClassifierAudit, NoChannel, RunOutcome};
 use bollo_modes::{constrain, effective};
@@ -134,6 +132,7 @@ fn cmd_run(cli: &Cli, args: &RunArgs) -> Result<i32, CliError> {
         session,
         mode: work_mode(cli),
         include_claude_md: args.include_claude_md,
+        run: None,
     };
     let mut channel = NoChannel;
     let outcome = {
@@ -199,6 +198,7 @@ fn cmd_resume(cli: &Cli, args: &ResumeArgs) -> Result<i32, CliError> {
         session,
         mode: work_mode(cli),
         include_claude_md: false,
+        run: None,
     };
     let mut channel = NoChannel;
     let outcome = {
@@ -320,9 +320,9 @@ fn parse_session(id: &str) -> Result<SessionId, CliError> {
 // --- serve -------------------------------------------------------------------
 
 /// `bollo serve`: the local HTTP API, loopback-only, bearer authenticated.
-/// The run lane stays honest until the P2 runtime bridge: the injected
-/// backend is `UnavailableBackend`, which refuses loudly instead of silently
-/// doing nothing, exactly as `bollo-api` intends.
+/// The P2 runtime bridge is live: API-created runs execute the CLI runtime
+/// through the composition root, with approvals answered on the decision
+/// route and an unanswered ask denying at the receipt TTL.
 fn cmd_serve(cli: &Cli, args: &ServeArgs) -> Result<i32, CliError> {
     let composition = Composition::build(cli)?;
     let bind = match &args.bind {
@@ -348,7 +348,8 @@ fn cmd_serve(cli: &Cli, args: &ServeArgs) -> Result<i32, CliError> {
     );
     let secret = token.secret.clone();
 
-    let backend: std::sync::Arc<dyn RunBackend> = std::sync::Arc::new(UnavailableBackend);
+    let backend: std::sync::Arc<dyn RunBackend> =
+        std::sync::Arc::new(composition::CliRunBackend::new(cli.clone()));
     let config = ApiConfig {
         bind,
         workspace_id: composition.root.identity_hash().to_string(),
@@ -372,8 +373,8 @@ fn cmd_serve(cli: &Cli, args: &ServeArgs) -> Result<i32, CliError> {
         "bollo: BOLLO_TOKEN={secret}   (showed once; a client that forgets it must restart the daemon)"
     );
     eprintln!(
-        "bollo: Ctrl-C stops the daemon; runs through this endpoint decline with \
-         'no run backend' until the P2 runtime bridge is wired"
+        "bollo: Ctrl-C stops the daemon; API-created runs execute the CLI runtime \
+         and pause on approvals until /v1/approvals/{{id}}/decision answers"
     );
 
     // Ctrl-C maps to exit 130 after best-effort cleanup, same contract as a run.
@@ -986,6 +987,7 @@ fn cmd_interactive(cli: &Cli) -> Result<i32, CliError> {
         session,
         mode: work_mode(cli),
         include_claude_md: false,
+        run: None,
     };
     let composition = RefCell::new(composition);
     let mut runner = InteractiveRunner {

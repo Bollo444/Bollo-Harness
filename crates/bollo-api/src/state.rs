@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ use serde_json::Value;
 
 use bollo_policy::approval::MemoryApprovalStore;
 use bollo_protocol::events::{EventEnvelope, EventType};
-use bollo_protocol::ids::{RunId, SessionId};
+use bollo_protocol::ids::{ApprovalId, RunId, SessionId};
 use bollo_protocol::vocab::{Effect, Profile, SandboxCapabilities, SandboxMode};
 use bollo_store::SqliteStore;
 
@@ -127,6 +128,9 @@ pub struct ApiState {
     pub config: ApiConfig,
     store: Mutex<SqliteStore>,
     approvals: Mutex<MemoryApprovalStore>,
+    /// Run backends park here while an API-made approval decision is pending;
+    /// the decision route wakes the run's worker thread.
+    approval_waiters: Mutex<HashMap<String, mpsc::Sender<bool>>>,
     idempotency: Mutex<IdempotencyStore>,
     bus: EventBus,
     rate: Mutex<HashMap<String, VecDeque<Instant>>>,
@@ -179,6 +183,7 @@ impl ApiState {
             config,
             store: Mutex::new(store),
             approvals: Mutex::new(MemoryApprovalStore::new()),
+            approval_waiters: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(idempotency),
             bus: EventBus::new(),
             rate: Mutex::new(HashMap::new()),
@@ -196,6 +201,31 @@ impl ApiState {
 
     pub fn approvals(&self) -> MutexGuard<'_, MemoryApprovalStore> {
         self.approvals.lock().expect("approval lock")
+    }
+
+    /// Publish a pending API approval for the run backend and take the waking
+    /// side of its waiter. Re-parking the same approval replaces the sender.
+    pub fn park_approval_waiter(&self, approval: &ApprovalId) -> mpsc::Receiver<bool> {
+        let (sender, receiver) = mpsc::channel();
+        self.approval_waiters
+            .lock()
+            .expect("approval waiter lock")
+            .insert(approval.to_string(), sender);
+        receiver
+    }
+
+    /// Wake the run backend for a decision that arrived through the API.
+    /// A missing waiter means the run already timed out or errored; the
+    /// decision was journaled by the approval route either way.
+    pub fn wake_approval(&self, approval: &ApprovalId, approved: bool) {
+        if let Some(sender) = self
+            .approval_waiters
+            .lock()
+            .expect("approval waiter lock")
+            .remove(&approval.to_string())
+        {
+            let _ = sender.send(approved);
+        }
     }
 
     pub fn idempotency(&self) -> MutexGuard<'_, IdempotencyStore> {
@@ -220,6 +250,14 @@ impl ApiState {
             .map_err(|err| ApiError::storage(format!("append event: {err}")))?;
         self.bus.publish(&envelope);
         Ok(envelope)
+    }
+
+    /// Fan an already-persisted envelope out to live subscribers. The run
+    /// bridge's runtime writes the shared journal itself, so this is the
+    /// publish-only half of `append_event`; never call it with an envelope
+    /// that is not durably stored.
+    pub fn publish_event(&self, envelope: &EventEnvelope) {
+        self.bus.publish(envelope);
     }
 
     /// Fixed-window limiter over the last 60 seconds, per token principal.

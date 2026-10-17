@@ -93,6 +93,11 @@ impl ApiServer {
             while !accept_state.is_shutdown() {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Tiny JSON responses must not wait on Nagle/ACK
+                        // interplay (Windows loopback especially), and a
+                        // snappier poll cadence keeps the very first request
+                        // after bind answered without perceptible queueing.
+                        let _ = stream.set_nodelay(true);
                         let state = Arc::clone(&accept_state);
                         std::thread::spawn(move || serve_connection(stream, state));
                     }
@@ -100,7 +105,7 @@ impl ApiServer {
                         if err.kind() == std::io::ErrorKind::WouldBlock
                             || err.kind() == std::io::ErrorKind::Interrupted =>
                     {
-                        std::thread::sleep(Duration::from_millis(25));
+                        std::thread::sleep(Duration::from_millis(5));
                     }
                     Err(_) => break,
                 }
@@ -660,14 +665,26 @@ fn decide_approval(
         time::OffsetDateTime::now_utc(),
     );
     match outcome {
-        bollo_policy::approval::ResolveOutcome::Approved
-        | bollo_policy::approval::ResolveOutcome::Denied => Ok(json(
-            200,
-            &ApprovalResultDto {
-                approval_id: approval.to_string(),
-                decision: parsed.decision,
-            },
-        )),
+        bollo_policy::approval::ResolveOutcome::Approved => {
+            state.wake_approval(approval, true);
+            Ok(json(
+                200,
+                &ApprovalResultDto {
+                    approval_id: approval.to_string(),
+                    decision: parsed.decision,
+                },
+            ))
+        }
+        bollo_policy::approval::ResolveOutcome::Denied => {
+            state.wake_approval(approval, false);
+            Ok(json(
+                200,
+                &ApprovalResultDto {
+                    approval_id: approval.to_string(),
+                    decision: parsed.decision,
+                },
+            ))
+        }
         bollo_policy::approval::ResolveOutcome::Expired => Err(ApiError::gone(
             "approval_expired",
             "this approval expired before the decision arrived",

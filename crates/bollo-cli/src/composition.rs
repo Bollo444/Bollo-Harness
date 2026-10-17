@@ -4,12 +4,17 @@
 //! adapter is selected. Nothing here decides policy; it only assembles inputs
 //! for `bollo-core`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
 
 use bollo_api::state::{PolicySnapshot as ApiPolicySnapshot, ProvenanceView as ApiProvenanceView, RuleView as ApiRuleView};
+use bollo_api::backend::{BackendRun, RunBackend};
+use bollo_api::state::SharedState;
+use bollo_api::ApiError;
 use bollo_core::runtime::{ApprovalChannel, ApprovalRequest as CoreApprovalRequest};
 use bollo_core::{RunOutcome, Runtime};
 use bollo_extensions::{ExtensionError, HookSpec, McpClient, McpServerSpec, McpTool, TrustStore};
@@ -18,14 +23,18 @@ use bollo_policy::config::{
     BolloConfig, ClassifierConfig, HookConfig, McpServerConfig, ProviderConfig, ProviderKind,
 };
 use bollo_policy::layers::{build_snapshot, validate_startup, CliOverrides, PolicySnapshot};
+use bollo_policy::approval::{ApprovalReceipt, ApprovalState as ReceiptState, ApprovalStore};
 use bollo_policy::MemoryApprovalStore;
 use bollo_providers::fake::{FakeProvider, ScriptedResponse};
 use bollo_providers::{FinishReason, Provider, ToolIntent, Usage};
 use bollo_protocol::cancel::CancellationToken;
 use bollo_protocol::errors::ErrorCode;
 use bollo_protocol::events::EventEnvelope;
-use bollo_protocol::ids::SessionId;
-use bollo_protocol::vocab::{ModeKind, Profile, SandboxCapabilities, SandboxMode};
+use bollo_protocol::ids::{RunId, SessionId, ToolCallId};
+use bollo_protocol::vocab::{
+    ModeKind, Profile, RunState as ApiRunState, SandboxCapabilities, SandboxMode, TerminalState,
+    VerificationStatus,
+};
 use bollo_store::SqliteStore;
 use bollo_tools::{McpDispatch, McpDispatchOutcome, McpToolSpec};
 use bollo_workspace::{
@@ -795,6 +804,9 @@ pub struct TurnSettings {
     pub session: SessionId,
     pub mode: ModeKind,
     pub include_claude_md: bool,
+    /// Run id pre-minted by an external driver. `None` lets the runtime start
+    /// its own durable run row (headless and interactive paths).
+    pub run: Option<RunId>,
 }
 
 /// Run one turn through the bounded runtime. The caller owns the sink and the
@@ -849,6 +861,9 @@ pub fn execute_turn(
         .with_cancel(cancel)
         .with_claude_md(settings.include_claude_md)
         .with_sandbox(sandbox.as_deref());
+    if let Some(run) = settings.run.clone() {
+        runtime = runtime.with_run_id(run);
+    }
     // Advisory classifier (BH-021): attached only when the trusted config
     // enabled it and this build has a live transport. The gate itself decides
     // eligibility, so deny/ask, read-only effects and unselected profiles
@@ -936,6 +951,218 @@ impl bollo_tui::TurnRunner for InteractiveRunner<'_> {
             summary: summarize(&outcome),
         }
     }
+}
+
+// --- P2 run bridge: the daemon's RunBackend is the CLI runtime ---------------
+
+/// The `RunBackend` for `bollo serve`. Each API-created run rebuilds the
+/// composition from the daemon's own trusted configuration and drives the same
+/// bounded loop the headless path uses, inside a worker thread.
+pub struct CliRunBackend {
+    cli: Cli,
+    cancel_by_run: Arc<Mutex<HashMap<String, CancellationToken>>>,
+}
+
+impl CliRunBackend {
+    pub fn new(cli: Cli) -> Self {
+        Self {
+            cli,
+            cancel_by_run: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl RunBackend for CliRunBackend {
+    fn start(&self, run: BackendRun, state: &SharedState) -> Result<(), ApiError> {
+        let cancellation = CancellationToken::new();
+        self.cancel_by_run
+            .lock()
+            .expect("cancel map")
+            .insert(run.run.to_string(), cancellation.clone());
+        let cli = self.cli.clone();
+        let state = Arc::clone(state);
+        std::thread::Builder::new()
+            .name(format!("bollo-run-{}", run.run.to_string()))
+            .spawn(move || drive_run(cli, run, state, cancellation))
+            .map_err(|err| ApiError::internal(format!("cannot spawn the run worker: {err}")))?;
+        Ok(())
+    }
+
+    fn cancel(&self, run: &RunId, _state: &SharedState) -> Result<ApiRunState, ApiError> {
+        let token = self
+            .cancel_by_run
+            .lock()
+            .expect("cancel map")
+            .remove(&run.to_string());
+        if let Some(token) = token {
+            token.cancel();
+        }
+        // Idempotent by contract: a token already gone means the run is
+        // terminal (or already cancels itself); the loop records the truth in
+        // the durable row either way.
+        Ok(ApiRunState::Cancelled)
+    }
+}
+
+/// Drive one API-created run on the worker thread. Errors before the loop
+/// begins mark the durable row immediately; the loop itself records its own
+/// truth via `finish` and the bridge mirrors it onto the API-minted row.
+fn drive_run(
+    cli: Cli,
+    run: BackendRun,
+    state: SharedState,
+    cancellation: CancellationToken,
+) {
+    let mark_terminal = |state: &SharedState,
+                         run: &BackendRun,
+                         terminal: TerminalState,
+                         reason: Option<String>,
+                         verification: VerificationStatus| {
+        let _ = state
+            .store()
+            .finish_run(&run.run, terminal, reason.as_deref(), verification);
+        state.clear_active(&run.session);
+    };
+
+    let ok_compare = match Composition::build(&cli) {
+        Ok(composition) => composition,
+        Err(err) => {
+            mark_terminal(
+                &state,
+                &run,
+                TerminalState::Failed,
+                Some(format!("composition: {}", err.message)),
+                VerificationStatus::Skipped,
+            );
+            return;
+        }
+    };
+    let mut composition = ok_compare;
+    // Same preconditions the headless path enforces: a usable provider and a
+    // sandbox decision that took the acknowledged risk path when needed.
+    if let Err(err) = composition.ensure_provider() {
+        mark_terminal(
+            &state,
+            &run,
+            TerminalState::Failed,
+            Some(format!("provider: {}", err.message)),
+            VerificationStatus::Skipped,
+        );
+        return;
+    }
+    composition.ensure_mcp();
+    if let Err(err) = composition.ensure_sandbox() {
+        mark_terminal(
+            &state,
+            &run,
+            TerminalState::Failed,
+            Some(format!("sandbox: {}", err.message)),
+            VerificationStatus::Skipped,
+        );
+        return;
+    }
+    if let Err(err) = composition.require_risk_acknowledgement() {
+        mark_terminal(
+            &state,
+            &run,
+            TerminalState::Failed,
+            Some(format!("risk: {}", err.message)),
+            VerificationStatus::Skipped,
+        );
+        return;
+    }
+
+    let settings = TurnSettings {
+        session: run.session.clone(),
+        mode: cli.mode.map(Into::into).unwrap_or(ModeKind::Build),
+        // The daemon has no run-level CLI args; headless default applies in.
+        include_claude_md: false,
+        // One truthful run record: the runtime adopts the API-minted row
+        // instead of starting its own.
+        run: Some(run.run.clone()),
+    };
+    let sink_state = Arc::clone(&state);
+    let mut sink = move |event: &EventEnvelope| {
+        // The runtime persists the event into the shared journal itself; the
+        // bridge only fans it out to live SSE subscribers.
+        sink_state.publish_event(event);
+    };
+    let mut channel = ApiApprovalChannel {
+        state: Arc::clone(&state),
+        session: run.session.clone(),
+        run: run.run.clone(),
+    };
+    let outcome = execute_turn(
+        &mut composition,
+        &settings,
+        &run.prompt,
+        &mut sink,
+        &mut channel,
+        cancellation,
+    );
+    mark_terminal(
+        &state,
+        &run,
+        outcome.state,
+        outcome.reason,
+        outcome.verification,
+    );
+}
+
+/// The daemon-side approval channel: publish the pending approval into the
+/// daemon's approval view, park the run, and wake on the decision route.
+/// Expiry answers deny — a decision either arrives or the action is refused.
+struct ApiApprovalChannel {
+    state: SharedState,
+    session: SessionId,
+    run: RunId,
+}
+
+impl ApprovalChannel for ApiApprovalChannel {
+    fn request(&mut self, request: CoreApprovalRequest) -> Option<bool> {
+        let receipt = ApprovalReceipt {
+            approval_id: request.approval_id.clone(),
+            session_id: self.session.clone(),
+            run_id: self.run.clone(),
+            // The runtime keeps the authoritative receipt; this mirror only
+            // has to render faithfully for an external approver.
+            tool_call_id: ToolCallId::generate(),
+            tool_name: request.tool_name.clone(),
+            intent_hash: request.intent_hash.clone(),
+            workspace_identity: self.state.config.workspace_id.clone(),
+            policy_revision: request.policy_revision,
+            target_preimage: None,
+            state: ReceiptState::Pending,
+            expires_at: request.expires_at.clone(),
+            consumed_at: None,
+            note: None,
+            summary: request.summary.clone(),
+        };
+        if let Err(err) = self.state.approvals().insert(receipt) {
+            // The external view cannot accept it, so no decision can ever
+            // arrive on time: fail closed rather than silently approving.
+            eprintln!("bollo: cannot expose the approval through the API: {err}");
+        }
+        let waiter = self.state.park_approval_waiter(&request.approval_id);
+        // Wait until the documented expiry; malformed stamps lose nothing, we
+        // recurse to a bounded grace period.
+        let wait = parse_expiry(&request.expires_at);
+        match waiter.recv_timeout(wait) {
+            Ok(approved) => Some(approved),
+            Err(_) => Some(false),
+        }
+    }
+}
+
+fn parse_expiry(stamp: &str) -> Duration {
+    use time::format_description::well_known::Rfc3339;
+    time::OffsetDateTime::parse(stamp, &Rfc3339)
+        .ok()
+        .map(|expiry| {
+            (expiry - time::OffsetDateTime::now_utc()).unsigned_abs()
+        })
+        .unwrap_or(Duration::from_secs(300))
+        .min(Duration::from_secs(600))
 }
 
 pub fn summarize(outcome: &RunOutcome) -> String {

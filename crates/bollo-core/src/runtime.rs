@@ -147,6 +147,10 @@ pub struct Runtime<'a> {
     /// Per-run classifier audit, reported through `RunOutcome` and persisted on
     /// the run record. Never emitted as an event, so the event schema is fixed.
     classifier_audit: ClassifierAudit,
+    /// Run id pre-minted by an external driver (the API bridge). When set,
+    /// `run()` adopts this id instead of starting its own row: the durable run
+    /// record is the API's, and events stay attached to it everywhere.
+    preset_run_id: Option<RunId>,
 }
 
 impl<'a> Runtime<'a> {
@@ -186,7 +190,15 @@ impl<'a> Runtime<'a> {
             classifier: None,
             sandbox: None,
             classifier_audit: ClassifierAudit::default(),
+            preset_run_id: None,
         }
+    }
+
+    /// Adopt a pre-minted run id. The durable run row must already exist; the
+    /// runtime records its lifecycle against it without starting another.
+    pub fn with_run_id(mut self, run: RunId) -> Self {
+        self.preset_run_id = Some(run);
+        self
     }
 
     /// Attach the advisory classifier gate. It is consulted only for eligible
@@ -262,21 +274,28 @@ impl<'a> Runtime<'a> {
         let workspace_identity = self.workspace_identity.clone();
         let model = self.model.clone();
         let include_claude_md = self.include_claude_md;
-        let run_id = match self
-            .store
-            .start_run(&session, provider.id(), &model, snapshot.revision)
-        {
-            Ok(run_id) => run_id,
-            Err(err) => {
-                return RunOutcome {
-                    run_id: RunId::generate(),
-                    state: TerminalState::Failed,
-                    reason: Some(format!("store: {err}")),
-                    verification: VerificationStatus::Skipped,
-                    tool_calls: 0,
-                    usage: Default::default(),
-                    classifier: ClassifierAudit::default(),
-                    exit_code: 1,
+        let run_id = match self.preset_run_id.clone() {
+            // A pre-minted id means the driver already created the durable
+            // row; adopting it keeps one truthful record per run.
+            Some(preset) => preset,
+            None => {
+                match self
+                    .store
+                    .start_run(&session, provider.id(), &model, snapshot.revision)
+                {
+                    Ok(run_id) => run_id,
+                    Err(err) => {
+                        return RunOutcome {
+                            run_id: RunId::generate(),
+                            state: TerminalState::Failed,
+                            reason: Some(format!("store: {err}")),
+                            verification: VerificationStatus::Skipped,
+                            tool_calls: 0,
+                            usage: Default::default(),
+                            classifier: ClassifierAudit::default(),
+                            exit_code: 1,
+                        }
+                    }
                 }
             }
         };
