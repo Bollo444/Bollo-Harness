@@ -866,7 +866,7 @@ impl SqliteStore {
             let mut statement = self.conn.prepare(
                 "SELECT id, relative_path FROM artifacts
                  WHERE retention_class = 'tool-output'
-                   AND julianday(created_at) <= julianday('now', '-' || ?1 || ' days')
+                   AND julianday(substr(created_at, 1, 19)) <= julianday('now', '-' || ?1 || ' days')
                  ORDER BY id ASC",
             )?;
             for row in statement

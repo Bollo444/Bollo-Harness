@@ -22,11 +22,14 @@ offscreen `TestBackend` golden contract at 80/120 columns — and `Terminal::ope
 drives crossterm raw mode, press-filtered key events with Ctrl-C never recording a
 decision and Ctrl-D exiting only from an empty idle prompt, while injected streams, the
 headless renderer and `--no-color` stay byte-identical.
-**Verified:** `cargo test --workspace` green (0 failures; the serve CLI test runs the real
-daemon end-to-end), `scripts/validate_docs.py` PASS; commits `509112a`, `18a338d`,
-`5dfa4f6`. Two transient full-suite runs failed with connection resets right after a
-forced process-tree kill on the host and both re-ran green unchanged — noted here so the
-flaky window is known.
+**Verified:** `cargo test --workspace` green (356 passed, 0 failed; the serve CLI test
+runs the real daemon end-to-end), `scripts/validate_docs.py` PASS; commits `509112a`,
+`18a338d`, `5dfa4f6`. Full-suite runs exposed a real one from BH-016 mid-stretch: with
+nanosecond RFC-3339 stamps, SQLite rounds the stored artifact timestamp up while its own
+`julianday('now')` truncates, so a fresh artifact could sit ~0.1 ms *ahead* of "now" and
+the zero-day cutoff prune missed it. The comparison now truncates the stamp to whole
+seconds (`julianday(substr(created_at, 1, 19))`), which is monotone and deterministic;
+the store suite was then re-run ten consecutive times, all green.
 **Open:** scrollback/evidence/diff panes on the new screen, the AT-017 OpenAPI/SSE
 conformance run, the P0b registry (`runs list`) path for classifier price sourcing, remote
 MCP/ACP build-outs, and the macOS/Linux enforcement gap all remain named in the registry
