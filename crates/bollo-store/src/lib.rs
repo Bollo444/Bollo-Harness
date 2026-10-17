@@ -628,6 +628,13 @@ impl SqliteStore {
             "DELETE FROM checkpoints WHERE session_id = ?1",
             params![session.as_str()],
         )?;
+        // Artifact rows belong to their run: deleting the session deletes its
+        // journal record of every artifact. Body files stay until a retention
+        // sweep removes orphaned content addresses (see prune_expired_artifacts).
+        deleted += tx.execute(
+            "DELETE FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE session_id = ?1)",
+            params![session.as_str()],
+        )?;
         deleted += tx.execute(
             "DELETE FROM events WHERE session_id = ?1",
             params![session.as_str()],
@@ -836,6 +843,133 @@ impl SqliteStore {
             )
             .optional()?
             .ok_or_else(|| StoreError::NotFound(format!("artifact {id}")))
+    }
+
+    /// Prune artifacts whose retention class makes them ephemeral once they are
+    /// older than `retention_days`. Ephemeral artifacts are tool outputs kept
+    /// for context reconstruction only; the trusted configuration's
+    /// `content_retention_days` is enforced by calling this through
+    /// `bollo sessions prune`. Durable artifacts (any other class) are never
+    /// touched. Content-addressed files are shared between rows: a file is
+    /// removed only when every row that referenced it is being pruned, and a
+    /// body whose file cannot be deleted keeps its row, because the journal
+    /// must never claim a file it cannot read back. `retention_days = 0`
+    /// prunes every already-recorded ephemeral artifact. Returns the number of
+    /// rows removed.
+    pub fn prune_expired_artifacts(
+        &mut self,
+        directory: &Path,
+        retention_days: i64,
+    ) -> Result<usize, StoreError> {
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        {
+            let mut statement = self.conn.prepare(
+                "SELECT id, relative_path FROM artifacts
+                 WHERE retention_class = 'tool-output'
+                   AND julianday(created_at) <= julianday('now', '-' || ?1 || ' days')
+                 ORDER BY id ASC",
+            )?;
+            for row in statement
+                .query_map(params![retention_days], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+            {
+                candidates.push(row?);
+            }
+        }
+        if candidates.is_empty() {
+            self.remove_orphan_bodies(directory)?;
+            return Ok(0);
+        }
+
+        // How many rows share each content address, in total versus how many
+        // of those rows are being pruned.
+        let mut total_references: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        {
+            let mut statement = self
+                .conn
+                .prepare("SELECT relative_path, COUNT(*) FROM artifacts GROUP BY relative_path")?;
+            for row in statement
+                .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?
+            {
+                let (relative_path, count) = row?;
+                total_references.insert(relative_path, count);
+            }
+        }
+        let mut pruned_references: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (_, relative_path) in &candidates {
+            *pruned_references.entry(relative_path.clone()).or_default() += 1;
+        }
+
+        let tx = self.conn.transaction()?;
+        let mut pruned = 0usize;
+        let mut files_removed: Vec<String> = Vec::new();
+        for (id, relative_path) in &candidates {
+            let every_reference_pruned =
+                pruned_references[relative_path] == total_references[relative_path];
+            let file_gone = if every_reference_pruned
+                && !files_removed.contains(relative_path)
+            {
+                let path = directory.join(relative_path);
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        files_removed.push(relative_path.clone());
+                        true
+                    }
+                    // The row outlived its body once; recording the row again
+                    // would promise a read that cannot happen.
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(_) => false,
+                }
+            } else {
+                // A durable row still shares this body; the file stays.
+                true
+            };
+            if !file_gone {
+                continue;
+            }
+            tx.execute("DELETE FROM artifacts WHERE id = ?1", params![id])?;
+            pruned += 1;
+        }
+        tx.commit()?;
+        self.remove_orphan_bodies(directory)?;
+        Ok(pruned)
+    }
+
+    /// Orphan sweep: content-addressed bodies whose every referencing row is
+    /// gone (this call, or a session deletion) are removed. A missing file is
+    /// already fine; any other removal failure is reported rather than
+    /// silently leaving an unreadable promise behind.
+    fn remove_orphan_bodies(&self, directory: &Path) -> Result<(), StoreError> {
+        let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
+        {
+            let mut statement = self.conn.prepare("SELECT relative_path FROM artifacts")?;
+            for row in statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .flatten()
+            {
+                referenced.insert(row);
+            }
+        }
+        if let Ok(entries) = std::fs::read_dir(directory) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !name.starts_with("sha256-") || referenced.contains(name.as_ref()) {
+                    continue;
+                }
+                if let Err(err) = std::fs::remove_file(entry.path()) {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        return Err(StoreError::Io(err.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn artifact_count(&self) -> Result<u64, StoreError> {
@@ -1231,6 +1365,75 @@ mod tests {
         let replayed = store.replay(&session, 0).unwrap();
         assert_eq!(replayed[0].event_type, EventType::RunFinished);
         assert_eq!(replayed[0].data["state"], "completed");
+    }
+
+    #[test]
+    fn tool_output_artifacts_expire_while_durable_classes_stay() {
+        let mut store = store();
+        let session = store.create_session("ws-1", None).unwrap();
+        let run = store.start_run(&session, "anthropic", "model", 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        store
+            .write_run_artifact(dir.path(), b"old tool stdout", "text/plain", "tool-output", &run)
+            .unwrap();
+        store
+            .write_run_artifact(dir.path(), b"durable evidence", "text/plain", "evidence", &run)
+            .unwrap();
+        assert_eq!(store.artifact_count().unwrap(), 2);
+
+        assert_eq!(store.prune_expired_artifacts(dir.path(), 0).unwrap(), 1);
+        assert_eq!(store.artifact_count().unwrap(), 1);
+        let durable = store.artifacts_for_run(&run).unwrap();
+        assert_eq!(durable.len(), 1);
+        let bytes = store.read_artifact(dir.path(), &durable[0].id).unwrap();
+        assert_eq!(bytes, b"durable evidence");
+        // The pruned body's file is gone; the durable body's file remains.
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|e| e.file_name().into_string().unwrap()))
+            .collect();
+        assert!(names.len() == 1, "one durable body file survives pruning: {names:?}");
+    }
+
+    #[test]
+    fn a_body_shared_with_a_durable_row_survives_pruning() {
+        let mut store = store();
+        let session = store.create_session("ws-1", None).unwrap();
+        let ephemeral_run = store.start_run(&session, "anthropic", "model", 1).unwrap();
+        let durable_run = store.start_run(&session, "anthropic", "model", 2).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        store
+            .write_run_artifact(dir.path(), b"shared body", "text/plain", "tool-output", &ephemeral_run)
+            .unwrap();
+        let durable = store
+            .write_run_artifact(dir.path(), b"shared body", "text/plain", "evidence", &durable_run)
+            .unwrap();
+
+        // Both rows share one content-addressed file; pruning the ephemeral
+        // row keeps the file readable through the durable row.
+        assert_eq!(store.prune_expired_artifacts(dir.path(), 0).unwrap(), 1);
+        let bytes = store.read_artifact(dir.path(), &durable.id).unwrap();
+        assert_eq!(bytes, b"shared body");
+        assert_eq!(store.artifact_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn retention_respects_the_cutoff_and_reports_zero_without_candidates() {
+        let mut store = store();
+        let session = store.create_session("ws-1", None).unwrap();
+        let run = store.start_run(&session, "anthropic", "model", 1).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        store
+            .write_run_artifact(dir.path(), b"fresh output", "text/plain", "tool-output", &run)
+            .unwrap();
+        // A fresh body is inside any positive retention window.
+        assert_eq!(store.prune_expired_artifacts(dir.path(), 7).unwrap(), 0);
+        assert_eq!(store.artifact_count().unwrap(), 1);
+        // A zero-day window expires everything already recorded.
+        assert_eq!(store.prune_expired_artifacts(dir.path(), 0).unwrap(), 1);
+        assert_eq!(store.artifact_count().unwrap(), 0);
+        // Pruning again with nothing to do is a clean no-op.
+        assert_eq!(store.prune_expired_artifacts(dir.path(), 0).unwrap(), 0);
     }
 
     #[test]

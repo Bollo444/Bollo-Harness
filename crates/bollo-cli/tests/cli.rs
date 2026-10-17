@@ -312,6 +312,32 @@ fn sessions_list_export_and_delete() {
 
     let refused = fixture.output(&["sessions", "delete", &session]);
     assert_eq!(refused.status.code(), Some(2), "deletion needs --yes");
+
+    // BH-016 retention: `sessions prune` is destructive too, so it demands the
+    // same explicit confirmation, carries the same refusals, and prunes only
+    // ephemeral tool-output bodies — durable artifact rows always survive.
+    let unconfirmed = fixture.output(&["sessions", "prune", "--days", "0"]);
+    assert_eq!(unconfirmed.status.code(), Some(2), "pruning needs --yes");
+
+    let prune_fixture_session = store_fixture_artifacts(&fixture, "retention-fixture");
+    let pruned = fixture.output(&["sessions", "prune", "--days", "0", "--yes"]);
+    assert_eq!(pruned.status.code(), Some(0), "stderr: {}", stderr(&pruned));
+    assert!(
+        stderr(&pruned).contains("pruned 1 tool-output artifact"),
+        "stderr: {}",
+        stderr(&pruned)
+    );
+
+    let store = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();
+    assert_eq!(store.artifact_count().unwrap(), 1, "durable row survives");
+    let again = fixture.output(&["sessions", "prune", "--days", "0", "--yes"]);
+    assert_eq!(again.status.code(), Some(0));
+    assert!(stderr(&again).contains("pruned 0 tool-output artifact(s)"), "stderr: {}", stderr(&again));
+
+    // The helper's own session is cleaned up so the flow's final assertion
+    // ("no local sessions") still holds exactly as documented.
+    let cleanup = fixture.output(&["sessions", "delete", &prune_fixture_session, "--yes"]);
+    assert_eq!(cleanup.status.code(), Some(0));
     let deleted = fixture.output(&["sessions", "delete", &session, "--yes"]);
     assert_eq!(deleted.status.code(), Some(0));
     let after = fixture.output(&["sessions", "list"]);
@@ -852,4 +878,20 @@ fn interactive_session_drives_the_real_runtime() {
     let store = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();
     assert!(!store.list_sessions().unwrap().is_empty());
     std::env::remove_var("BOLLO_CONFIG");
+}
+
+/// BH-016 helper: record one ephemeral and one durable artifact in the same
+/// run of the fixture's durable store, bound to a session of its own.
+fn store_fixture_artifacts(fixture: &Fixture, session_label: &str) -> String {
+    let mut store = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();
+    let session = store.create_session(session_label, None).unwrap();
+    let run = store.start_run(&session, "anthropic", "test-model", 1).unwrap();
+    let artifacts = fixture.state.join("artifacts");
+    store
+        .write_run_artifact(&artifacts, b"tool output body", "text/plain", "tool-output", &run)
+        .unwrap();
+    store
+        .write_run_artifact(&artifacts, b"evidence body", "text/plain", "evidence", &run)
+        .unwrap();
+    session.as_str().to_string()
 }

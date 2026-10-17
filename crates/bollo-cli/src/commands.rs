@@ -279,6 +279,32 @@ fn cmd_sessions(cli: &Cli, args: &SessionsArgs) -> Result<i32, CliError> {
             );
             Ok(0)
         }
+        SessionsCommand::Prune { days, yes } => {
+            if !yes {
+                return Err(CliError::usage(
+                    "refusing to prune local artifacts without --yes",
+                ));
+            }
+            let window = days.unwrap_or(
+                composition
+                    .user_config
+                    .privacy
+                    .content_retention_days
+                    .min(i64::MAX as u32) as i64,
+            );
+            if window < 0 {
+                return Err(CliError::usage("--days must not be negative"));
+            }
+            let pruned = composition
+                .store
+                .prune_expired_artifacts(&composition.artifact_dir(), window)
+                .map_err(|err| CliError::recovery(format!("cannot prune artifacts: {err}")))?;
+            eprintln!(
+                "bollo: pruned {pruned} tool-output artifact(s) older than {window} day(s); \
+                 durable artifacts and source files were never touched"
+            );
+            Ok(0)
+        }
     }
 }
 

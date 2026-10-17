@@ -148,6 +148,7 @@ Add `--output ndjson` instead of `text` to get the event stream on stdout
 | `bollo resume …` | Continue a persisted session after recovery checks |
 | `bollo checkpoint preview ID` / `restore ID` | Compare or conditionally restore a patched file |
 | `bollo mcp list` | Configured MCP servers, enablement and trust (never auto-starts one) |
+| `bollo sessions prune --yes` | Remove tool-output artifacts older than the retention window (`--days` overrides) |
 
 `bollo <command> --help` is the working reference; [the CLI design
 document](reference/cli.md) is the contract of intent behind it.

@@ -168,6 +168,15 @@ pub enum SessionsCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Prune ephemeral tool-output artifacts older than the retention window
+    Prune {
+        /// Retention window override in days (default from the trusted config)
+        #[arg(long, value_name = "DAYS")]
+        days: Option<i64>,
+        /// Required confirmation for a destructive local operation
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Args)]

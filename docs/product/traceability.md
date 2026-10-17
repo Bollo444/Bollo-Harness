@@ -24,7 +24,7 @@ not tests already executed by the documentation validator.
 | BH-013 — Bounded context and instructions | MVP | implemented | `bollo-core` | [spec](../architecture/context-and-providers.md) | [AT-013](../delivery/testing.md) |
 | BH-014 — MCP stdio tools | MVP | implemented | `bollo-extensions` | [spec](../reference/mcp.md) | [AT-014](../delivery/testing.md) |
 | BH-015 — Trusted lifecycle hooks | MVP | implemented | `bollo-extensions` | [spec](../reference/hooks-and-plugins.md) | [AT-015](../delivery/testing.md) |
-| BH-016 — Privacy and credential isolation | MVP | partial | `bollo-store` | [spec](../security/privacy.md) | [AT-016](../delivery/testing.md) |
+| BH-016 — Privacy and credential isolation | MVP | implemented | `bollo-store` | [spec](../security/privacy.md) | [AT-016](../delivery/testing.md) |
 | BH-017 — Optional local HTTP API | P2 | partial | `bollo-api` | [spec](../reference/api.md) | [AT-017](../delivery/testing.md) |
 | BH-018 — MCP Streamable HTTP | P2 | designed_not_built | `bollo-extensions` | [spec](../reference/mcp.md) | [AT-018](../delivery/testing.md) |
 | BH-019 — ACP client adapter | P2 | designed_not_built | `bollo-cli` | [spec](../reference/acp.md) | [AT-019](../delivery/testing.md) |
