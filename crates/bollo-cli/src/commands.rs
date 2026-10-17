@@ -954,11 +954,33 @@ fn cmd_interactive(cli: &Cli) -> Result<i32, CliError> {
     crate::install_cancel_handler(cancel.clone());
 
     let presenter = Presenter::from_env(!cli.no_color);
-    let terminal = Terminal::new(
-        Box::new(std::io::stdin().lock()),
-        Box::new(std::io::stdout()),
-        presenter,
-    );
+    // ADR-016: a real terminal draws the ratified ratatui screen; anything
+    // refused (narrow window, non-terminal stdout) falls back to the unchanged
+    // linear renderer, which is also what tests drive.
+    let header = bollo_tui::screens::Header {
+        workspace: composition.root.identity_hash()[..12].to_string(),
+        binding: format!("{}/{}", composition.provider_label(), composition.model),
+        profile: composition.snapshot.profile.as_str().to_string(),
+        sandbox: match composition.snapshot.sandbox {
+            SandboxMode::Workspace => "workspace",
+            SandboxMode::Off => "off",
+        }
+        .to_string(),
+    };
+    let terminal = match Terminal::open_real(presenter.clone(), header) {
+        Ok(live) => {
+            eprintln!("bollo: interactive screen attached (ratatui; Ctrl-D exits from the idle prompt)");
+            live
+        }
+        Err(reason) => {
+            eprintln!("bollo: note: {reason}");
+            Terminal::new(
+                Box::new(std::io::stdin().lock()),
+                Box::new(std::io::stdout()),
+                presenter,
+            )
+        }
+    };
     let mut tui = TuiSession::new(terminal, 2_000);
     let settings = TurnSettings {
         session,

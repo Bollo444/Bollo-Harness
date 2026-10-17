@@ -7,6 +7,9 @@ license.workspace = true
 [dependencies]
 bollo-protocol = { path = "../bollo-protocol" }
 serde_json.workspace = true
+# ADR-016: interactive path renders through ratatui 0.30 (its crossterm backend
+# is a re-export, so no second crossterm major exists in the graph).
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 
 [dev-dependencies]
 tempfile.workspace = true

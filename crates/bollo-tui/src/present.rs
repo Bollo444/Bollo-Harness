@@ -257,6 +257,17 @@ impl Transcript {
         lines.push(TranscriptLine { class, text });
     }
 
+    /// Every visible line with its eviction class, oldest first. The ratatui
+    /// screen renderer maps the class to a visual role (ADR-016 style
+    /// direction) without changing the text.
+    pub fn lines_with_class(&self) -> Vec<(LineClass, String)> {
+        self.lines
+            .borrow()
+            .iter()
+            .map(|line| (line.class, line.text.clone()))
+            .collect()
+    }
+
     pub fn snapshot(&self) -> Vec<String> {
         self.lines
             .borrow()

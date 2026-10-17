@@ -6,6 +6,7 @@
 //! event. Approvals are keyboard-driven, and "not answered" is never "yes".
 
 pub mod present;
+pub mod screens;
 pub mod slash;
 pub mod terminal;
 
@@ -104,7 +105,7 @@ impl TuiSession {
             self.report(&outcome.summary);
         }
         loop {
-            let Some(line) = self.terminal.borrow_mut().prompt("bollo> ") else {
+            let Some(line) = self.terminal.borrow_mut().prompt("bollo> ", &self.transcript) else {
                 break;
             };
             let trimmed = line.trim();

@@ -100,8 +100,9 @@ Bollo-Harness/
 │   │   └── tests/http.rs             loopback tests (single-threaded in CI)
 │   ├── bollo-tui/                    interactive client over the event stream
 │   │   ├── src/present.rs            presentation layer
+│   │   ├── src/screens.rs            ratatui screen renderer (ADR-016), TestBackend golden tests
 │   │   ├── src/slash.rs              slash commands (Bollo contracts)
-│   │   ├── src/terminal.rs           terminal I/O and the approval channel
+│   │   ├── src/terminal.rs           terminal seam: injected streams or ratatui/crossterm live path
 │   │   └── src/lib.rs                session surface
 │   └── bollo-cli/                    `bollo` binary and composition root
 │       ├── src/main.rs               entry point; logic lives in the library
