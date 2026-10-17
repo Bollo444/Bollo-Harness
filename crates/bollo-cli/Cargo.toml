@@ -3,6 +3,9 @@ name = "bollo-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Two binaries live here (the real CLI plus the MCP test fixture); without
+# this key `cargo run --package bollo-cli` refuses to guess which to run.
+default-run = "bollo"
 
 [[bin]]
 name = "bollo"
