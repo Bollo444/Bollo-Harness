@@ -192,6 +192,12 @@ override point, which is how an OpenAI-compatible endpoint is reached today thro
 | 5 | Recovery required / unknown effects |
 | 130 | User cancellation |
 
+## 7. Glossary
+
+A quick guide to the terms you'll see throughout these docs and in the code. Keep it bookmarked.
+
+[Glossary](glossary.md)
+
 ## 8. When it refuses
 
 Every message below was produced by this build; they are the intended first responses, not
@@ -216,10 +222,13 @@ crashes:
   unavailable elsewhere and workspace mode refuses rather than pretending.
 - **Live network paths**: the real HTTPS transport is feature-gated and no CI job exercises
   it against a vendor.
-- **The requirement registry is stale**: every entry in
-  [requirements.json](product/requirements.json) still says `implementation_status:
-  not_implemented` although the code exists; it was written as a phase-gate ledger and has
-  not been re-baselined.
+- **The requirement registry was re-baselined 2026-10-17**: instead of 21
+  `not_implemented` entries, [requirements.json](product/requirements.json) now records
+  the tested state — 15 implemented (BH-006 Windows AppContainer only), 3 partial with
+  the gap named (BH-011 keyboard TUI lacks raw mode, BH-016 canary/retention sweep,
+  BH-017 API crate not wired into the CLI), 3 designed not built (BH-018/019/020). Each
+  entry cites its executed tests; AT-xxx runtime acceptance remains planned in
+  [testing.md](delivery/testing.md).
 
 The full picture, including accepted risks, is in the [backlog and risk
 register](delivery/backlog-and-risks.md) and §8 of [HARNESS_SPEC.md](../HARNESS_SPEC.md).

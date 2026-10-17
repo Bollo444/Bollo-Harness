@@ -6,6 +6,52 @@ verified (the command and its result, not an intention), and what is still open.
 [decision log](decisions/decision-log.md) holds the choices; this page holds the narrative
 that connects them, so none of it lives only in a chat transcript.
 
+## 2026-10-17 — the ratatui TUI got its visual style direction
+
+**What:** [ux/ratatui-style-direction.md](ux/ratatui-style-direction.md) decided what the
+approved port draws: W2's header/conversation/evidence/prompt and W3's approval box map to
+ratatui primitives (Block, scrollable Paragraph viewport, Clear+Block overlay), the
+presenter's `Style`/`LineClass` enums become the role vocabulary (bold user echo, dim
+events, tool/approval/error colors where words still carry the meaning), and an added
+offscreen test contract — cell assertions at 80/120 columns, approval states, no-color
+parity, and a `Decision`-eviction proof. ADR-016's gate now cites the page.
+**Verified:** `scripts/validate_docs.py` PASS; every principle conforms to the existing
+interaction contract (risk in words not color, unknown spend never $0.00, W2 narrow
+stacking, approval content untouched).
+**Open:** the port itself — golden tests first; no `bollo-tui` code changed today.
+
+## 2026-10-17 — OD-12 resolved: ratatui is the interactive stack
+
+**What:** the owner approved ADR-016 — `ratatui` 0.30.2 with its crossterm backend, behind
+the existing `Presenter`/`Transcript`/`SlashCommands`/`TurnRunner`/`Approver` seams — and
+OD-12 left the open-decisions queue; [research/tui-libraries.md](research/tui-libraries.md)
+now records the survey as ratified evidence and BH-011's registry evidence names the
+decided stack. Nothing in `bollo-tui` changed.
+**Verified:** `scripts/validate_docs.py` PASS (46 documents); no code touched, so the
+343-test suite's last green run still stands.
+**Open:** the port itself — offscreen golden tests first, using the executed probe at
+(`target/probe/ratatui`) as the shape; the visual style direction stays open and does not
+gate the test-first port.
+
+## 2026-10-17 — the requirement registry stopped pretending nothing is implemented
+
+**What:** `docs/product/requirements.json` re-baselined from 21×`not_implemented` to the
+tested state: 14 `implemented`, BH-006 `implemented_windows_only` (the container is the
+Windows AppContainer; workspace mode refuses elsewhere), 3 `partial` with the gap named
+(BH-011 keyboard TUI without raw mode and never a real console, BH-016 no seeded
+canary/retention sweep, BH-017 API crate not wired into the CLI), and 3
+`designed_not_built` (BH-018/019/020). Every non-designed entry gained an `evidence`
+field naming the executed tests; [traceability](product/traceability.md) now shows the
+status per row, and `scripts/validate_docs.py` enforces the status vocabulary — no
+status without evidence, no evidence on a designed entry. Why: the phase-gate ledger
+predated the implementation and told every newcomer nothing existed, which was false.
+**Verified:** statuses and evidence strings were derived by grepping named test
+functions in this worktree before writing them; `validate_docs.py` PASS with the new
+contract; the AT-xxx definitions and acceptance wording are untouched.
+**Open:** runtime acceptance tests AT-001…AT-021 remain planned
+([testing](delivery/testing.md)); the registry describes code state, not accepted
+release scope. BH-011's gap is the open OD-12 decision, BH-021's adoption is OD-11.
+
 ## 2026-10-07 — the interactive stack is surveyed, not yet chosen
 
 **What:** pinned survey of Rust TUI libraries

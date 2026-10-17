@@ -4,8 +4,9 @@
 pinned toolchain (1.93.1); registry dates and download counts come from the crates.io API;
 dependency weights are measured with `cargo tree`; and one claim is *executed* evidence —
 an offscreen render probe that compiled and ran on this host (see "The measured case").
-Nothing here is adopted yet: the decision is [ADR-016](../decisions/decision-log.md) plus
-[OD-12](../decisions/decision-log.md).
+Ratified 2026-10-17: the owner approved `ratatui` 0.30.2 with its crossterm backend
+([ADR-016](../decisions/decision-log.md); OD-12 resolved), so the survey below is now the
+recorded evidence behind an adopted decision; the port is not yet implemented.
 
 ## Why this is open
 

@@ -149,6 +149,9 @@ def main():
     rejects(schemas['approval.schema.json'], bad, 'invalid approval hash')
 
     # Requirement/document/test mapping, not runtime acceptance execution.
+    # The registry is re-baselined: statuses describe the state of code
+    # verified by named executed tests on Windows, while runtime acceptance
+    # tests AT-xxx remain planned in docs/delivery/testing.md.
     registry = load(DOCS / 'product/requirements.json')['requirements']
     check([r['id'] for r in registry] == [f'BH-{i:03}' for i in range(1, 22)], 'Requirement IDs missing/reordered')
     check(len({r['acceptance_test'] for r in registry}) == len(registry), 'Duplicate acceptance IDs')
@@ -159,7 +162,13 @@ def main():
         check(requirement['id'] in trace and requirement['acceptance_test'] in trace, f'Traceability missing: {requirement}')
         check(f"### {requirement['acceptance_test']} —" in tests, f'Missing test definition: {requirement}')
         check(requirement['acceptance'] in tests, f'Acceptance wording drift: {requirement}')
-        check(requirement['implementation_status'] == 'not_implemented', 'Docs-only baseline overclaims implementation')
+        status = requirement['implementation_status']
+        check(status in {'implemented', 'implemented_windows_only', 'partial', 'designed_not_built'},
+              f'Unknown implementation_status: {requirement}')
+        if status == 'designed_not_built':
+            check('evidence' not in requirement, f'Designed entry carries evidence: {requirement}')
+        else:
+            check(requirement.get('evidence', '').strip() != '', f'Status without evidence: {requirement}')
     check(sum(r['phase'] == 'MVP' for r in registry) == 16, 'MVP scope drift')
     known_requirements = {r['id'] for r in registry}
     known_tests = {r['acceptance_test'] for r in registry}

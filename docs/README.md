@@ -35,6 +35,7 @@ owns semantic consistency.
 ### Start here
 
 - [Getting started](getting-started.md) — build, test, first offline run, exit codes, refusals and limits
+- [Glossary](glossary.md) — everyday definitions for ADR, OD, containment, closure, TUI, offscreen render, golden tests and more
 - [Work journal](work-journal.md) — what changed in each stretch of work, what was verified, what is open
 
 ### Conversation archive
@@ -95,6 +96,7 @@ owns semantic consistency.
 
 - [Interaction and terminal UX specification](ux/interaction-design.md)
 - [Terminal wireframes and interaction states](ux/wireframes.md)
+- [Visual style direction for the ratatui TUI](ux/ratatui-style-direction.md) — role vocabulary, widget mapping and the offscreen test contract behind ADR-016's port
 
 ### Planning, testing and operations
 

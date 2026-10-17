@@ -122,11 +122,12 @@ Bollo-Harness/
 │       ├── recovery.rs               crash recovery at journal boundaries
 │       ├── classifier.rs             BH-021 through the real runtime
 │       └── mcp_tools.rs              discovered MCP tools behind the same gate
-└── docs/                             61 tracked documents (validator input)
+└── docs/                             63 tracked documents (validator input)
     ├── README.md                     documentation atlas
     ├── BLUEPRINT.md                  executive and technical overview
     ├── getting-started.md            build, test, a first offline run, refusals and limits
     ├── work-journal.md               per-stretch history: changes, verification, open items
+    ├── glossary.md                   plain-language definitions of the project's terms
     ├── arena-conversation.md         design conversation record
     ├── architecture/                 system design, runtime, data, diagrams, this tree
     ├── product/                      vision, PRD, MVP, requirements, traceability
@@ -142,9 +143,9 @@ Bollo-Harness/
 
 Fixtures for the integration tests are produced by the fixture binaries listed above
 (`mcp_fixture`, `mcp_fake_server`, `hook_fixture`); there is no `tests/fixtures/`
-directory. Every requirement in `docs/product/requirements.json` still records
-`not_implemented`: that registry tracks phase-gate acceptance, while this tree describes
-only what exists.
+directory. The requirement registry `docs/product/requirements.json` was re-baselined
+on 2026-10-17 from all-`not_implemented` to per-entry statuses that cite executed test
+evidence; the AT-xxx acceptance tests it names remain planned.
 
 ## Not in the repository (proposed remainder)
 

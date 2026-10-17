@@ -2,8 +2,9 @@
 
 All ADRs below are **PROPOSED**, not owner-approved. Date: 2026-10-03; the entries added
 2026-10-07 say in their own text whether they record something already implemented in the
-MVP or a choice still waiting for the owner (ADR-016). Changes append rationale,
+MVP or a choice still waiting for the owner. Changes append rationale,
 consequences, evidence and acceptance rather than erasing history.
+Exception: ADR-016 was owner-ratified on 2026-10-17 (OD-12 resolved; recorded in its text).
 
 ## ADR-001 — independent harness, not a merged fork
 
@@ -231,9 +232,9 @@ which [privacy](../security/privacy.md) states rather than implies.
 (`tests/tests/recovery.rs`), and ADR-007 for what the journal may claim.
 **Gate:** migrations stay additive and versioned; `synchronous` is never weakened silently.
 
-## ADR-016 — adopt ratatui for the interactive path (proposal; owner decision pending)
+## ADR-016 — adopt ratatui for the interactive path (approved 2026-10-17; OD-12 resolved)
 
-**Decision (proposed):** build the interactive path on `ratatui` 0.30.2 with its crossterm
+**Decision (owner-approved 2026-10-17):** build the interactive path on `ratatui` 0.30.2 with its crossterm
 backend, behind the existing seams (`Presenter`, `Transcript`, `SlashCommands`,
 `TurnRunner`/`Approver`), staged: keep the protocol-facing types, replace the render/input
 layer, add offscreen golden tests, and leave the headless renderer and `--no-color` untouched.
@@ -249,8 +250,11 @@ fitting, and a framework to track; in exchange the interactive path becomes test
 gains real input handling.
 **Evidence:** [research/tui-libraries.md](../research/tui-libraries.md) — pinned versions,
 measured closures, the probe run, and the documented Windows key-event trap.
-**Gate:** owner approval (OD-12) and a style direction; implementation starts with the golden
-tests, not after them.
+**Gate:** OD-12 resolved on 2026-10-17: ratatui 0.30 + crossterm, behind the existing seams.
+The visual style direction was decided the same day
+([style direction](../ux/ratatui-style-direction.md)): W2/W3 become regions, the presenter
+`Style`/`LineClass` enums become role vocabulary, and the added offscreen test contract
+stands. Implementation starts with the golden tests, not after them.
 
 ## Open decisions requiring approval
 
@@ -267,4 +271,3 @@ tests, not after them.
 | OD-09 | Local encryption requirements? | OS access control/FDE in MVP; no false at-rest claim | P0a |
 | OD-10 | Accessibility release bar? | Keyboard/no-color/linear output; test screen reader claims | P1d |
 | OD-11 | Adopt Jev as an advisory risk classifier? | Escalation-only, opt-in, fail-neutral; never authorizes | classifier design |
-| OD-12 | Interactive TUI stack and style? | ratatui 0.30 + crossterm behind the existing seams | before interactive UX work |

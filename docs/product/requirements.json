@@ -1,6 +1,7 @@
 {
   "schema_version": "0.1",
-  "status": "proposed",
+  "status": "re-baselined 2026-10-17",
+  "status_note": "implementation_status describes the state of code verified by the named executed tests on Windows, not runtime acceptance tests AT-xxx, which are planned in docs/delivery/testing.md and executed separately. designed_not_built means only the spec exists.",
   "requirements": [
     {
       "id": "BH-001",
@@ -11,7 +12,8 @@
       "spec": "architecture/system-design.md",
       "acceptance_test": "AT-001",
       "acceptance": "Discover canonical root without executing project code; preserve dirty files and reject untrusted config escalation.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-workspace/src/root.rs units discovers_current_directory_without_executing_anything and rejects_missing_and_file_paths; tests/tests/negative_suite.rs project_configuration_cannot_widen_the_profile; dirty-file refusal preserved through checkpoints_preview_and_refuse_user_edits and golden_edit_verify_restore."
     },
     {
       "id": "BH-002",
@@ -22,7 +24,8 @@
       "spec": "architecture/context-and-providers.md",
       "acceptance_test": "AT-002",
       "acceptance": "Pass text/tool/fragment/error/cancel fixtures for Anthropic Messages and xAI Chat Completions with origin-bound credentials.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-providers/src/anthropic.rs parses_text_and_fragmented_tool_arguments; xai.rs parses_fragmented_tool_call_arguments; stream.rs assembles_fragmented_arguments_into_one_intent; fake.rs typed cancel/exhaust errors. Live HTTPS transport is feature-gated; no CI job contacts a vendor."
     },
     {
       "id": "BH-003",
@@ -33,7 +36,8 @@
       "spec": "architecture/runtime.md",
       "acceptance_test": "AT-003",
       "acceptance": "Complete deterministic edit/test workflow, serialize effects, stop at configured ceilings, and never dispatch partial tool arguments.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "tests/tests/golden_scenario.rs golden_edit_verify_restore, run_limit_stops_the_loop_with_exit_4, cancellation_maps_to_130_and_runs_nothing; crates/bollo-core/src/scheduler.rs serializes effects; stream assembly dispatched only complete tool arguments."
     },
     {
       "id": "BH-004",
@@ -44,7 +48,8 @@
       "spec": "reference/tools.md",
       "acceptance_test": "AT-004",
       "acceptance": "Validate all seven tool schemas; reject malformed arguments and path escapes before effects.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-tools/src/lib.rs registry of the seven tools (read_file, search, write_file, apply_patch, exec, git_status, git_diff); prepare.rs read_file_prepares_workspace_scoped_intent and write_binds_target_preimage; execute.rs stale_write_is_refused_at_execution."
     },
     {
       "id": "BH-005",
@@ -55,7 +60,8 @@
       "spec": "security/permissions.md",
       "acceptance_test": "AT-005",
       "acceptance": "Apply four presets and deny/ask/allow precedence with provenance; demonstrate all policy fixtures including negative cases.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-policy layers/normalize/evaluate/gate units; tests/tests/negative_suite.rs deny_beats_ask_and_allow_for_the_same_intent, read_only_is_an_inspection_ceiling_no_rule_can_unlock, an_explicit_ask_stays_an_ask_under_unrestricted; examples/policy-cases.json validated by scripts/validate_docs.py."
     },
     {
       "id": "BH-006",
@@ -66,7 +72,8 @@
       "spec": "security/permissions.md",
       "acceptance_test": "AT-006",
       "acceptance": "Probe filesystem and tool-network containment; refuse workspace_auto when required enforcement is absent; never silently run on host.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented_windows_only",
+      "evidence": "crates/bollo-workspace/tests/container_escapes.rs (6 escape tests); CLI workspace_sandbox_is_verified_or_refused_but_never_host_fallback and workspace_mode_runs_exec_children_inside_the_container; python scripts/containment_evidence.py 8/8, CI-published artifact. The container backend is the Windows AppContainer; workspace_auto on other systems refuses rather than pretending."
     },
     {
       "id": "BH-007",
@@ -77,7 +84,8 @@
       "spec": "ux/wireframes.md",
       "acceptance_test": "AT-007",
       "acceptance": "Bind approval to exact intent/hash/revision/expiry and atomically consume it; concurrent or stale requests cannot execute twice.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-policy/src/approval.rs approved_receipt_is_single_use and stale_revision_or_preimage_is_refused; gate.rs approved_receipt_authorizes_once and mismatched_expectation_is_stale; tests/tests/classifier.rs escalated_approval_keeps_intent_hash_and_stays_consumable_once."
     },
     {
       "id": "BH-008",
@@ -88,7 +96,8 @@
       "spec": "architecture/data-model.md",
       "acceptance_test": "AT-008",
       "acceptance": "Kill at operation boundaries; resume as interrupted/unknown without auto-replaying side effects; retain ordered events.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "tests/tests/recovery.rs stale_operation_becomes_unknown_and_is_never_replayed and unknown_operations_survive_later_runs_in_the_same_store; crates/bollo-store/src/lib.rs units operation_intent_is_journaled_before_result, events_append_with_monotonic_seq_and_replay_in_order, interrupted_runs_are_detectable; SQLite journal engine per ADR-015 (rusqlite 0.32, WAL, synchronous=FULL)."
     },
     {
       "id": "BH-009",
@@ -99,7 +108,8 @@
       "spec": "architecture/data-model.md",
       "acceptance_test": "AT-009",
       "acceptance": "Refuse stale preimages and ambiguous replacements; restore only matching postimages; preserve pre-existing user edits.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-workspace/src/fs.rs write_requires_matching_preimage and duplicate_fragments_are_ambiguous; checkpoints.rs restores_only_matching_postimage, binary_or_oversize_preimages_disclose_unavailable_restore; tests/tests/golden_scenario.rs golden_edit_verify_restore."
     },
     {
       "id": "BH-010",
@@ -110,7 +120,8 @@
       "spec": "architecture/context-and-providers.md",
       "acceptance_test": "AT-010",
       "acceptance": "Track reservations, nullable unknown spend, tool/time/token ceilings; stop finite-spend runs when pricing is unknown.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-core/src/budget.rs units; a spend cap without prices blocks with pricing_unknown exit 1 (observed; getting-started refusals table); run_limit_stops_the_loop_with_exit_4; crates/bollo-store run_summaries_aggregate_usage_and_keep_newest_first with contract-mandated nullable unknown cost."
     },
     {
       "id": "BH-011",
@@ -121,7 +132,8 @@
       "spec": "ux/interaction-design.md",
       "acceptance_test": "AT-011",
       "acceptance": "Complete setup, approval, diff and recovery keyboard-only at 80 and 120 columns with no-color mode.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "partial",
+      "evidence": "Verified offscreen over injected streams: crates/bollo-tui/src/present.rs width_is_respected_at_80_and_120_columns and no_color_path_never_emits_ansi; terminal.rs absent_or_ambiguous_answers_are_not_approval and closed_input_blocks_instead_of_defaulting_to_yes; slash.rs command units; CLI interactive_session_drives_the_real_runtime drives the live session object. Gap: input is line-based, with no raw mode, keystroke events, redraws or scrolling; what the user saw is not asserted visually offscreen; a real terminal session was never used. Stack decided and ratified (ADR-016: ratatui 0.30 + crossterm, 2026-10-17); the port is not yet implemented, so the raw-mode gap stands."
     },
     {
       "id": "BH-012",
@@ -132,7 +144,8 @@
       "spec": "reference/cli.md",
       "acceptance_test": "AT-012",
       "acceptance": "Emit schema-valid NDJSON only on stdout; ask without a user blocks with exit 3; cancellation maps to 130.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-cli/tests/cli.rs headless_ndjson_stdout_is_machine_only, headless_ask_blocks_with_exit_3, invalid_arguments_exit_2, interactive_without_a_terminal_is_exit_2; tests/tests/golden_scenario.rs cancellation_maps_to_130_and_runs_nothing; events closed vocabulary via negative_suite event_shapes_are_closed."
     },
     {
       "id": "BH-013",
@@ -143,7 +156,8 @@
       "spec": "architecture/context-and-providers.md",
       "acceptance_test": "AT-013",
       "acceptance": "Record context provenance and preserve complete tool pairs during compaction; repository instructions never change permissions.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-core/src/context.rs discovers_instructions_with_provenance; compaction.rs units including a_single_oversized_turn_is_reported_not_mangled; instructions are data, not permissions, and cannot widen the profile (negative_suite project_configuration_cannot_widen_the_profile)."
     },
     {
       "id": "BH-014",
@@ -154,7 +168,8 @@
       "spec": "reference/mcp.md",
       "acceptance_test": "AT-014",
       "acceptance": "Trust startup separately; negotiate pinned protocol, namespace tools, route through gate, and handle mid-call failure without replay.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-extensions/tests/mcp_stdio.rs untrusted_startup_is_refused, discovered_mcp_tools_join_the_model_list_and_pass_the_gate, denied_approval_never_reaches_the_server, mid_call_death_is_journaled_unknown_exactly_once, server_reported_tool_error_is_failed_not_unknown, announced_tool_list_changes_refresh_the_model_view_mid_run; src/trust.rs units; CLI mcp.rs contract tests and doctor untrusted reporting. Remote (Streamable HTTP) MCP is BH-018 and not built."
     },
     {
       "id": "BH-015",
@@ -165,7 +180,8 @@
       "spec": "reference/hooks-and-plugins.md",
       "acceptance_test": "AT-015",
       "acceptance": "Before-hook veto/error/timeout denies action; after-hook failure cannot falsify results; no recursive authorization bypass.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "crates/bollo-extensions/tests/hooks_stdio.rs drives real hook processes through the hook_fixture binary; hooks.rs untrusted_hook_never_spawns; hooks receive no authority: the after-hook result cannot alter an already-recorded verdict, and authorization stays with the single-use approval receipts."
     },
     {
       "id": "BH-016",
@@ -176,7 +192,8 @@
       "spec": "security/privacy.md",
       "acceptance_test": "AT-016",
       "acceptance": "Seed secret canaries; verify no provider secrets in child env, normal logs or redacted exports; verify deletion and retention semantics.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "partial",
+      "evidence": "Credential stores stay outside every container grant (crates/bollo-workspace/tests/container_toolchain.rs credential_stores_stay_outside_every_grant); secret-shaped values are redacted at policy and API layers (bollo-policy redacts_secret_shaped, bollo-api auth tokens redact) and the classifier wire never sees the canary (typesafe.rs redaction_canary_never_reaches_the_wire); deletion without touching source (store sessions_can_be_listed_and_deleted_without_touching_source, CLI sessions delete). Gap: no dedicated suite seeds canaries across child environment, logs and every export path together, and enforcing content_retention_days is not visible in the test tree."
     },
     {
       "id": "BH-017",
@@ -187,7 +204,8 @@
       "spec": "reference/api.md",
       "acceptance_test": "AT-017",
       "acceptance": "Conform to all OpenAPI routes; enforce bearer scopes, Host/Origin and workspace ownership; replay SSE and validate idempotency.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "partial",
+      "evidence": "crates/bollo-api/tests/http.rs (18 checks including approval_decision_is_single_use_and_binding plus auth, idempotency, events and wire units) pass — the crate is real and tested. Gaps: bollo-api is not a dependency of bollo-cli and no `bollo api`/`serve` command starts it, so the full OpenAPI/SSE conformance run in AT-017 has not been executed."
     },
     {
       "id": "BH-018",
@@ -198,7 +216,7 @@
       "spec": "reference/mcp.md",
       "acceptance_test": "AT-018",
       "acceptance": "Pass version/session/reconnect/OAuth/resource-binding/SSRF tests against independent reference servers.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "designed_not_built"
     },
     {
       "id": "BH-019",
@@ -209,7 +227,7 @@
       "spec": "reference/acp.md",
       "acceptance_test": "AT-019",
       "acceptance": "Negotiate a pinned ACP version and translate sessions/prompts/updates/permissions/cancel without creating a second tool gate.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "designed_not_built"
     },
     {
       "id": "BH-020",
@@ -220,7 +238,7 @@
       "spec": "architecture/system-design.md",
       "acceptance_test": "AT-020",
       "acceptance": "Child cannot exceed parent capability or budget; cancellation propagates; read-only scope cannot mutate through shell or MCP.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "designed_not_built"
     },
     {
       "id": "BH-021",
@@ -231,7 +249,8 @@
       "spec": "reference/classifier.md",
       "acceptance_test": "AT-021",
       "acceptance": "Escalate only: classifier hints turn allow into ask at most and never grant, widen or deny; disabled, failing, malformed or untrusted responses leave the policy decision unchanged; deny/ask, read-only effects and unselected profiles produce zero calls.",
-      "implementation_status": "not_implemented"
+      "implementation_status": "implemented",
+      "evidence": "tests/tests/classifier.rs: escalating_hint_turns_allow_into_ask_and_is_audited, zero-call guards (ask/deny policies, read-only effects, unselected profile), unavailable_verdict_is_fail_neutral, and exported NDJSON byte-identical with and without a classifier; crates/bollo-policy/src/classifier.rs escalation_is_monotone_and_only_allow_changes plus a bounded redacted projection; typesafe.rs transport keeps a pinned HTTPS origin and only an env-named credential; CLI tests enforce default-disabled and never-blocks-a-turn posture. Adoption of the Typesafe provider is still an owner decision (OD-11); no vendor was contacted."
     }
   ]
 }
