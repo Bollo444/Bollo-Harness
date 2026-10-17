@@ -6,6 +6,17 @@ verified (the command and its result, not an intention), and what is still open.
 [decision log](decisions/decision-log.md) holds the choices; this page holds the narrative
 that connects them, so none of it lives only in a chat transcript.
 
+## 2026-10-17 — two more owner decisions left the queue
+
+**What:** [ADR-017](decisions/decision-log.md) adopted Apache-2.0 (the canonical
+`LICENSE` file ships at the top level), and [ADR-018](decisions/decision-log.md) adopted
+the advisory risk classifier default-disabled; OD-05 and OD-11 left the queue each
+exactly once, and BH-021's registry evidence now names adoption instead of hedging.
+**Verified:** `scripts/validate_docs.py` PASS; the license text was fetched verbatim
+from apache.org.
+**Open:** SPDX header sweep stays with packaging (BL-13); the classifier vendor path
+remains unexercised by design.
+
 ## 2026-10-17 — the ratatui TUI got its visual style direction
 
 **What:** [ux/ratatui-style-direction.md](ux/ratatui-style-direction.md) decided what the

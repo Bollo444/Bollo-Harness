@@ -256,6 +256,33 @@ The visual style direction was decided the same day
 `Style`/`LineClass` enums become role vocabulary, and the added offscreen test contract
 stands. Implementation starts with the golden tests, not after them.
 
+## ADR-017 — the distribution license is Apache-2.0
+
+**Decision (owner-approved 2026-10-17):** Bollo is distributed under Apache-2.0. The
+canonical text is the repository `LICENSE` file ("Copyright 2026 The Bollo Harness
+Authors"); per-token attribution follows its appendix using the appropriate comment
+syntax. **Alternatives:** MIT (simplest, no patent clause); leaving the decision pending
+(kept code unreleasable). **Reason:** for a security harness the explicit patent grant
+is the point, and ratatui's own MIT OR Apache-2.0 stance makes compatibility a
+non-issue. **Consequences:** code release is now possible; OD-05 leaves the queue.
+Third-party upstream reuse stays governed by the provenance review it already received.
+**Evidence:** the `LICENSE` file; [research/licensing.md](../research/licensing.md).
+**Gate:** revisit only if an owner re-licenses; SPDX header sweep belongs to packaging
+(BL-13).
+
+## ADR-018 — adopt the advisory risk classifier, default-disabled (OD-11)
+
+**Decision (owner-approved 2026-10-17):** the advisory Typesafe (Jev) risk classifier is
+adopted as designed: escalation-only, opt-in, default-disabled, fail-neutral, and never
+authorizing — the posture the code and its 12-check root suite already enforce.
+**Alternatives:** leaving adoption pending; building it in as always-on. **Reason:**
+the escalate-only contract is verify-and-adopt rather than a design risk; adoption
+removes the ambiguity that kept BH-021's registry evidence hedging. **Consequences:**
+OD-11 leaves the queue; the vendor path remains unexercised (feature gates, no CI job
+contacts a vendor) and stays named. **Evidence:** BH-021's evidence field; OD-11's
+approved default. **Gate:** if a future owner tightens privacy posture, re-open before
+enabling it in any shipped default configuration.
+
 ## Open decisions requiring approval
 
 | ID | Question | Recommended default | Needed by |
@@ -264,10 +291,8 @@ stands. Implementation starts with the golden tests, not after them.
 | OD-02 | Implementation language? | Rust; validate team capacity | P0a |
 | OD-03 | macOS first-class at launch? | Linux first, honest beta scope | P0a |
 | OD-04 | Low-friction behavior? | Workspace-auto requires proven isolation | P0a |
-| OD-05 | Bollo distribution license? | Evaluate Apache-2.0 vs MIT, owner decides | before code release |
 | OD-06 | MCP shipping baseline? | Pinned tested subset, review newer revision | P0b |
 | OD-07 | Provider model IDs/pricing source? | Configured/tested models and trusted prices | P0b |
 | OD-08 | Remote HTTP/API availability? | P2 local-first, remote explicit opt-in | P2 design |
 | OD-09 | Local encryption requirements? | OS access control/FDE in MVP; no false at-rest claim | P0a |
 | OD-10 | Accessibility release bar? | Keyboard/no-color/linear output; test screen reader claims | P1d |
-| OD-11 | Adopt Jev as an advisory risk classifier? | Escalation-only, opt-in, fail-neutral; never authorizes | classifier design |

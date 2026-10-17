@@ -205,7 +205,7 @@
       "acceptance_test": "AT-017",
       "acceptance": "Conform to all OpenAPI routes; enforce bearer scopes, Host/Origin and workspace ownership; replay SSE and validate idempotency.",
       "implementation_status": "partial",
-      "evidence": "crates/bollo-api/tests/http.rs (18 checks including approval_decision_is_single_use_and_binding plus auth, idempotency, events and wire units) pass — the crate is real and tested. Gaps: bollo-api is not a dependency of bollo-cli and no `bollo api`/`serve` command starts it, so the full OpenAPI/SSE conformance run in AT-017 has not been executed."
+      "evidence": "crates/bollo-api/tests/http.rs (18 checks including approval_decision_is_single_use_and_binding plus auth, idempotency, events and wire units) pass \u2014 the crate is real and tested. Gaps: bollo-api is not a dependency of bollo-cli and no `bollo api`/`serve` command starts it, so the full OpenAPI/SSE conformance run in AT-017 has not been executed."
     },
     {
       "id": "BH-018",
@@ -250,7 +250,7 @@
       "acceptance_test": "AT-021",
       "acceptance": "Escalate only: classifier hints turn allow into ask at most and never grant, widen or deny; disabled, failing, malformed or untrusted responses leave the policy decision unchanged; deny/ask, read-only effects and unselected profiles produce zero calls.",
       "implementation_status": "implemented",
-      "evidence": "tests/tests/classifier.rs: escalating_hint_turns_allow_into_ask_and_is_audited, zero-call guards (ask/deny policies, read-only effects, unselected profile), unavailable_verdict_is_fail_neutral, and exported NDJSON byte-identical with and without a classifier; crates/bollo-policy/src/classifier.rs escalation_is_monotone_and_only_allow_changes plus a bounded redacted projection; typesafe.rs transport keeps a pinned HTTPS origin and only an env-named credential; CLI tests enforce default-disabled and never-blocks-a-turn posture. Adoption of the Typesafe provider is still an owner decision (OD-11); no vendor was contacted."
+      "evidence": "tests/tests/classifier.rs: escalating_hint_turns_allow_into_ask_and_is_audited, zero-call guards (ask/deny policies, read-only effects, unselected profile), unavailable_verdict_is_fail_neutral, and exported NDJSON byte-identical with and without a classifier; crates/bollo-policy/src/classifier.rs escalation_is_monotone_and_only_allow_changes plus a bounded redacted projection; typesafe.rs transport keeps a pinned HTTPS origin and only an env-named credential; CLI tests enforce default-disabled and never-blocks-a-turn posture. Adopted by OD-11 on 2026-10-17 (default-disabled, opt-in); the vendor path stays unexercised and no CI job contacts a provider."
     }
   ]
 }
