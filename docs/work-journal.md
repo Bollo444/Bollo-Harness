@@ -6,6 +6,32 @@ verified (the command and its result, not an intention), and what is still open.
 [decision log](decisions/decision-log.md) holds the choices; this page holds the narrative
 that connects them, so none of it lives only in a chat transcript.
 
+## 2026-10-17 — retention enforcement, `bollo serve`, and the ratified ratatui port
+
+**What:** three backlog items shipped in one stretch. BH-016 turned the privacy contract
+into code: `content_retention_days` is enforced by `sessions prune` (cutoff semantics,
+durable classes survive, `--yes` required), session deletion cascades artifact rows, and a
+new root canary suite (`tests/tests/privacy.rs`) plants a fake provider credential in the
+coordinator environment and proves it never reaches a child env, the journal, a run
+summary or an export. BH-017 wired `bollo serve`: the daemon binds loopback-only, prints
+its base URL and single-use `BOLLO_TOKEN` once, serves the CLI's own durable database
+(`ApiConfig.store_path`, added so the API stops opening a shadow store), refuses
+non-loopback binds, and keeps the run lane loud (`UnavailableBackend`). BH-011 executed
+the ratified port (ADR-016 + the style direction): `bollo-tui` gains `screens.rs` — the
+offscreen `TestBackend` golden contract at 80/120 columns — and `Terminal::open_real`
+drives crossterm raw mode, press-filtered key events with Ctrl-C never recording a
+decision and Ctrl-D exiting only from an empty idle prompt, while injected streams, the
+headless renderer and `--no-color` stay byte-identical.
+**Verified:** `cargo test --workspace` green (0 failures; the serve CLI test runs the real
+daemon end-to-end), `scripts/validate_docs.py` PASS; commits `509112a`, `18a338d`,
+`5dfa4f6`. Two transient full-suite runs failed with connection resets right after a
+forced process-tree kill on the host and both re-ran green unchanged — noted here so the
+flaky window is known.
+**Open:** scrollback/evidence/diff panes on the new screen, the AT-017 OpenAPI/SSE
+conformance run, the P0b registry (`runs list`) path for classifier price sourcing, remote
+MCP/ACP build-outs, and the macOS/Linux enforcement gap all remain named in the registry
+and getting-started lists.
+
 ## 2026-10-17 — two more owner decisions left the queue
 
 **What:** [ADR-017](decisions/decision-log.md) adopted Apache-2.0 (the canonical
