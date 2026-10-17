@@ -130,6 +130,7 @@ fn config(state_dir: &Path, tokens: Vec<ApiToken>, backend: Arc<dyn RunBackend>)
         workspace_id: "ws_test".into(),
         workspace_scope: state_dir.display().to_string(),
         state_directory: state_dir.join("api-state"),
+        store_path: None,
         provider: "replay".into(),
         model: "replay-model".into(),
         policy: policy(),

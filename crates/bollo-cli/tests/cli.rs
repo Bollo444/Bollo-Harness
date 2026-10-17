@@ -880,6 +880,136 @@ fn interactive_session_drives_the_real_runtime() {
     std::env::remove_var("BOLLO_CONFIG");
 }
 
+/// Minimal HTTP/1.1 probe for the local API: enough for the wire contract
+/// (status code + raw response), no HTTP client dependency.
+fn http_get(addr: &str, path: &str, token: Option<&str>) -> (u16, String) {
+    use std::io::{Read, Write};
+    let auth = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Connection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let status: u16 = response
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    (status, response)
+}
+
+/// BH-017: `bollo serve` starts the daemon on loopback, prints its ephemeral
+/// base URL plus the bearer token exactly once, enforces the bearer on every
+/// route, and serves the read and approval lanes against the same durable
+/// store the CLI uses. The run lane refuses loudly (no runtime bridge yet).
+#[test]
+fn serve_binds_loopback_enforces_bearer_and_serves_the_same_store() {
+    let fixture = Fixture::new();
+    fixture.write_script(r#"[{"deltas": ["hello\n"], "finish": "end_turn"}]"#);
+    let replay = fixture.run_replay(&[], "ndjson");
+    assert_eq!(replay.status.code(), Some(0));
+    let before = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();
+    assert_eq!(before.list_sessions().unwrap().len(), 1);
+    drop(before);
+
+    let mut child = Command::new(BINARY)
+        .args(fixture.base_args())
+        .args(["serve"])
+        .env("BOLLO_CONFIG", &fixture.config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut base_url: Option<String> = None;
+    let mut token: Option<String> = None;
+    {
+        use std::io::BufRead;
+        let mut lines = std::io::BufReader::new(child.stderr.take().unwrap());
+        let mut line = String::new();
+        while token.is_none() {
+            line.clear();
+            if lines.read_line(&mut line).unwrap() == 0 {
+                panic!("serve exited before printing its bearer token");
+            }
+            if base_url.is_none() && line.starts_with("bollo: local API at ") {
+                base_url = Some(
+                    line.trim_start_matches("bollo: local API at ")
+                        .trim()
+                        .to_string(),
+                );
+            }
+            if line.contains("BOLLO_TOKEN=") {
+                token = Some(
+                    line.trim()
+                        .split("BOLLO_TOKEN=")
+                        .nth(1)
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .unwrap()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    let base_url = base_url.expect("the daemon prints its base URL before the token");
+    let token = token.expect("the daemon prints BOLLO_TOKEN=<secret>");
+    assert!(base_url.starts_with("http://127.0.0.1:"), "{base_url}");
+    let addr = base_url
+        .trim_start_matches("http://")
+        .trim_end_matches("/v1")
+        .to_string();
+
+    let mut ready = false;
+    for _ in 0..100 {
+        if http_get(&addr, "/v1/health", Some(&token)).0 == 200 {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "health never became ready");
+
+    // The bearer is enforced on every route, including health.
+    let (status, _) = http_get(&addr, "/v1/health", None);
+    assert_eq!(status, 401, "health must not answer without the bearer");
+    let (status, _) = http_get(&addr, "/v1/capabilities", Some("wrong-token"));
+    assert_eq!(status, 401, "a forged bearer must not read capabilities");
+    let (status, _) = http_get(&addr, "/v1/capabilities", Some(&token));
+    assert_eq!(status, 200);
+
+    // The read lane serves the same durable store the CLI wrote: the session
+    // the replay run created is visible to the daemon.
+    let session_id = {
+        let store = SqliteStore::open(&fixture.state.join("state.sqlite3")).unwrap();
+        store.list_sessions().unwrap()[0].id.clone()
+    };
+    let (status, body) = http_get(&addr, &format!("/v1/sessions/{session_id}"), Some(&token));
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains("sess_"),
+        "the daemon serves the durable session row: {body}"
+    );
+    // A foreign session id is 404, never a leak.
+    let (status, _) = http_get(
+        &addr,
+        &format!("/v1/sessions/{}", SessionId::generate()),
+        Some(&token),
+    );
+    assert_eq!(status, 404, "unknown sessions must 404");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
 /// BH-016 helper: record one ephemeral and one durable artifact in the same
 /// run of the fixture's durable store, bound to a session of its own.
 fn store_fixture_artifacts(fixture: &Fixture, session_label: &str) -> String {

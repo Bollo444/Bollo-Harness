@@ -86,7 +86,7 @@ Bollo-Harness/
 │   │   ├── src/budget.rs             tool-call, wall-clock, token and spend ceilings
 │   │   ├── src/classifier_audit.rs   per-run advisory classifier audit
 │   │   └── src/lib.rs                crate surface
-│   ├── bollo-api/                    BH-017 local HTTP API (not wired into the CLI)
+│   ├── bollo-api/                    BH-017 local HTTP API, started by `bollo serve`
 │   │   ├── src/server.rs             loopback HTTP transport
 │   │   ├── src/wire.rs               minimal HTTP/1.1 handling
 │   │   ├── src/auth.rs               bearer auth, capability checks, Host/Origin
@@ -151,7 +151,8 @@ evidence; the AT-xxx acceptance tests it names remain planned.
 
 - `packaging/` (release manifests, checksums, SBOM) and a dedicated
   `bollo-providers/src/credentials.rs` module.
-- The API crate is neither a dependency of `bollo-cli` nor started by it; remote access
+- The API crate is a dependency of `bollo-cli` and started by `bollo serve` (holding
+  `UnavailableBackend` until the P2 runtime bridge wires real execution); remote access
   stays out of scope.
 - Finer file splits from the earlier proposal that the implementation keeps in one module:
   the tool registry lives in `bollo-tools/src/lib.rs`, the SQLite store in

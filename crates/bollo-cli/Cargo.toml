@@ -33,6 +33,7 @@ bollo-extensions = { path = "../bollo-extensions" }
 bollo-modes = { path = "../bollo-modes" }
 bollo-core = { path = "../bollo-core" }
 bollo-tui = { path = "../bollo-tui" }
+bollo-api = { path = "../bollo-api" }
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -21,6 +21,7 @@ name P2 commands stay proposals.
 | `bollo config validate` | Syntax/semantic config checks | No |
 | `bollo doctor` | Capabilities, credentials presence, endpoint/config diagnostics | No project code; optional network check explicit |
 | `bollo mcp list` | Configured servers, trust, status | No server auto-start |
+| `bollo sessions prune [--days N]` | Delete expired ephemeral tool-output artifacts | Deletes local artifact rows/files with --yes |
 | `bollo checkpoint preview ID` | Compare preimage/postimage/current | No |
 | `bollo checkpoint restore ID` | Conditional restore with preview/approval | Yes, only hash-matching files |
 
@@ -84,7 +85,25 @@ Model/profile changes occur between runs; policy tightening during a run invalid
 pending approvals and applies at next dispatch. A widening change pauses the run and
 requires a new run. Slash command names are Bollo contracts, not promised upstream aliases.
 
+## Local API: `bollo serve`
+
+`bollo serve` starts the BH-017 loopback HTTP API ([API reference](api.md)) against the
+same durable store the CLI uses. Contract:
+
+- Loopback-only. `--bind ADDR` accepts a loopback `SocketAddr`; the default is
+  `127.0.0.1:0` (an ephemeral port, printed on stderr as
+  `bollo: local API at http://127.0.0.1:<port>/v1`). A non-loopback bind is refused
+  with exit 2.
+- One bearer token is generated at startup and printed exactly once as
+  `BOLLO_TOKEN=<secret>`. It is never stored or logged again; a client that forgets it
+  must restart the daemon. Every route, including `/v1/health`, requires it.
+- Runs through the endpoint decline loudly with a `no run backend is configured` error
+  until the P2 runtime bridge is wired: `bollo serve` never executes a run without the
+  explicit composition-root bridge.
+- Ctrl-C stops the daemon and maps to exit 130, the same contract as a run.
+
 ## Later commands
 
-`bollo serve` (P2 local API) and `bollo agent stdio` (P2 ACP) must not appear in MVP help
-as working features. Remote token issuance, clients and subagents have separate gates.
+`bollo serve` is the shipped P2 local API surface (above). `bollo agent stdio` (P2 ACP)
+must not appear in MVP help as a working feature. Remote token issuance, clients and
+subagents have separate gates.

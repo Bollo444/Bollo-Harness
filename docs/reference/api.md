@@ -1,7 +1,7 @@
 # Optional local API and endpoint documentation
 
-**P2 · not required for MVP. Loopback daemon core implemented (`bollo-api`); the
-`bollo api` CLI surface and remote exposure are not implemented.**
+**P2 · not required for MVP. Loopback daemon core implemented (`bollo-api`) and started
+by the CLI (`bollo serve`); remote exposure is not implemented.**
 Canonical contract: [OpenAPI 3.1 JSON](../contracts/openapi.json).
 Example DTOs: [api.json](../examples/api.json). This API is Bollo's original facade;
 it is neither Claude Code's API nor Grok's ACP or tools gRPC interface.
@@ -16,13 +16,14 @@ restart, SSE replay and live delivery with numeric session cursors, and the docu
 parsing, and a non-loopback bind is refused until the TLS and origin-allowlist review
 described below. End-to-end behavior is exercised by `crates/bollo-api/tests/http.rs`.
 
-Not yet implemented: the `bollo api` CLI surface and token-generation flow, the runtime
-bridge that executes runs (the daemon exposes a `RunBackend` port for the composition
-root), and any remote/TLS deployment. Event retention is unbounded today, so the
-documented `410 cursor_expired` path is unreachable, and approval views map
+Not yet implemented: the runtime bridge that executes runs (`bollo serve` injects
+`UnavailableBackend`, so run starts decline loudly until the composition root wires a
+real `RunBackend`), and any remote/TLS deployment. Event retention is unbounded today,
+so the documented `410 cursor_expired` path is unreachable, and approval views map
 `reason`/`rule_source` from the receipt summary conservatively until the runtime
-supplies richer provenance. The documentation validator still records BH-017 as
-`not_implemented` because it tracks the original docs-only baseline.
+supplies richer provenance. The full AT-017 OpenAPI/SSE conformance run remains open;
+the CLI-level wiring is exercised by the `serve_binds_loopback_enforces_bearer_and_serves_the_same_store`
+contract test in `bollo-cli`.
 
 ## Deployment, identity and auth
 

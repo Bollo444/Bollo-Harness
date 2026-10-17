@@ -99,6 +99,9 @@ pub enum Command {
     /// Configured MCP servers, enablement and trust status
     Mcp(McpArgs),
 
+    /// Start the local HTTP API on the loopback interface (P2 surface)
+    Serve(ServeArgs),
+
     /// Patch checkpoints: preimage/postimage preview and conditional restore
     Checkpoint(CheckpointArgs),
 }
@@ -228,6 +231,14 @@ pub enum ConfigCommand {
 pub struct McpArgs {
     #[command(subcommand)]
     pub command: McpCommand,
+}
+
+/// The local API daemon: loopback only, bearer-token authenticated.
+#[derive(Debug, clap::Args)]
+pub struct ServeArgs {
+    /// Loopback bind address, `IP:PORT` (defaults to an ephemeral port)
+    #[arg(long, value_name = "ADDR", default_value = None)]
+    pub bind: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

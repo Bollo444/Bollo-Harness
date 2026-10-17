@@ -89,6 +89,14 @@ pub struct ApiConfig {
     pub workspace_scope: String,
     /// Private state directory for the store, receipts and artifacts.
     pub state_directory: PathBuf,
+    /// Open this existing SQLite database instead of creating `{state_directory}/bollo.sqlite`.
+    /// `bollo serve` uses it so the daemon serves the same durable store the
+    /// CLI wrote, not a fresh shadow database.
+    pub store_path: Option<PathBuf>,
+    /// Open this existing SQLite database instead of creating
+    /// `{state_directory}/bollo.sqlite`. The CLI's `bollo serve` uses it so the
+    /// daemon serves the *same* durable store the CLI wrote, not a fresh
+    /// shadow database.
     pub provider: String,
     pub model: String,
     pub policy: PolicySnapshot,
@@ -136,7 +144,11 @@ impl ApiState {
     pub fn bootstrap(config: ApiConfig) -> Result<SharedState, ApiError> {
         std::fs::create_dir_all(&config.state_directory)
             .map_err(|err| ApiError::storage(format!("create state directory: {err}")))?;
-        let store = SqliteStore::open(&config.state_directory.join("bollo.sqlite"))
+        let store_path = config
+            .store_path
+            .clone()
+            .unwrap_or_else(|| config.state_directory.join("bollo.sqlite"));
+        let store = SqliteStore::open(&store_path)
             .map_err(|err| ApiError::storage(format!("open store: {err}")))?;
         let receipts = IdempotencyStore::open(&config.state_directory.join("api-receipts.sqlite"))?;
         Self::with_parts(config, store, receipts)

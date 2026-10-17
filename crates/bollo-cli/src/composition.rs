@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use bollo_api::state::{PolicySnapshot as ApiPolicySnapshot, ProvenanceView as ApiProvenanceView, RuleView as ApiRuleView};
 use bollo_core::runtime::{ApprovalChannel, ApprovalRequest as CoreApprovalRequest};
 use bollo_core::{RunOutcome, Runtime};
 use bollo_extensions::{ExtensionError, HookSpec, McpClient, McpServerSpec, McpTool, TrustStore};
@@ -703,6 +704,48 @@ impl Composition {
             .as_ref()
             .map(|path| path.display().to_string())
     }
+
+    /// `bollo serve` (BH-017): the daemon's immutable policy view, converted
+    /// from the CLI snapshot. Provenance is carried per rule with the layer it
+    /// came from and the trusted user configuration (or built-in defaults)
+    /// that the CLI loaded it through.
+    pub fn api_policy_snapshot(&self) -> ApiPolicySnapshot {
+        let config_source = self
+            .user_config_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "built-in defaults".to_string());
+        ApiPolicySnapshot {
+            revision: self.snapshot.revision,
+            profile: self.snapshot.profile,
+            sandbox: self.snapshot.sandbox,
+            isolation_verified: bollo_api::state::sandbox_verified(&self.snapshot.capabilities),
+            rules: self
+                .snapshot
+                .rules
+                .iter()
+                .map(|rule| ApiRuleView {
+                    id: rule.id.clone(),
+                    effect: rule.effect,
+                    tool: rule.tool.clone(),
+                    path_glob: rule.path_glob.clone(),
+                    argv_prefix: rule.argv_prefix.clone(),
+                })
+                .collect(),
+            provenance: self
+                .snapshot
+                .rules
+                .iter()
+                .map(|rule| ApiProvenanceView {
+                    rule_id: rule.id.clone(),
+                    source: config_source.clone(),
+                    layer: rule.source.as_str().to_string(),
+                })
+                .collect(),
+        }
+    }
+
+
 
     /// Create a fresh session bound to this workspace identity.
     pub fn new_session(&mut self, label: Option<&str>) -> Result<SessionId, CliError> {

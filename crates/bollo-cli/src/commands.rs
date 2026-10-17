@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use bollo_api::backend::UnavailableBackend;
+use bollo_api::{state::ApiConfig, ApiLimits, ApiServer, ApiToken, Capability, RunBackend};
 use bollo_core::{ClassifierAudit, NoChannel, RunOutcome};
 use bollo_modes::{constrain, effective};
 use bollo_policy::{evaluate, validate_startup};
@@ -22,6 +24,7 @@ use crate::args::*;
 use crate::composition::{self, summarize, Composition, InteractiveRunner, TurnSettings};
 use crate::render::HeadlessRenderer;
 use crate::CliError;
+use crate::install_cancel_handler;
 
 /// Prompt files are read locally with a size cap.
 pub const MAX_PROMPT_BYTES: u64 = 65_536;
@@ -36,6 +39,7 @@ pub fn dispatch(cli: Cli) -> Result<i32, CliError> {
         Some(Command::Config(args)) => cmd_config(&cli, args),
         Some(Command::Doctor) => cmd_doctor(&cli),
         Some(Command::Mcp(args)) => cmd_mcp(&cli, args),
+        Some(Command::Serve(args)) => cmd_serve(&cli, args),
         Some(Command::Checkpoint(args)) => cmd_checkpoint(&cli, args),
         None => cmd_interactive(&cli),
     }
@@ -311,6 +315,75 @@ fn cmd_sessions(cli: &Cli, args: &SessionsArgs) -> Result<i32, CliError> {
 fn parse_session(id: &str) -> Result<SessionId, CliError> {
     SessionId::parse(id.to_string())
         .map_err(|err| CliError::usage(format!("invalid session id {id:?}: {err}")))
+}
+
+// --- serve -------------------------------------------------------------------
+
+/// `bollo serve`: the local HTTP API, loopback-only, bearer authenticated.
+/// The run lane stays honest until the P2 runtime bridge: the injected
+/// backend is `UnavailableBackend`, which refuses loudly instead of silently
+/// doing nothing, exactly as `bollo-api` intends.
+fn cmd_serve(cli: &Cli, args: &ServeArgs) -> Result<i32, CliError> {
+    let composition = Composition::build(cli)?;
+    let bind = match &args.bind {
+        Some(raw) => raw
+            .parse::<std::net::SocketAddr>()
+            .map_err(|err| CliError::usage(format!("invalid --bind {raw:?}: {err}")))?,
+        None => std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            0,
+        ),
+    };
+    if !bind.ip().is_loopback() {
+        return Err(CliError::usage(
+            "--bind must be a loopback address: the local API never leaves this machine",
+        ));
+    }
+
+    // One opaque bearer token, generated at startup and printed once. It is
+    // never stored, logged again or accepted from a flag.
+    let token = ApiToken::generate(
+        "local",
+        vec![Capability::Read, Capability::Run, Capability::Approve],
+    );
+    let secret = token.secret.clone();
+
+    let backend: std::sync::Arc<dyn RunBackend> = std::sync::Arc::new(UnavailableBackend);
+    let config = ApiConfig {
+        bind,
+        workspace_id: composition.root.identity_hash().to_string(),
+        workspace_scope: composition.root.canonical().display().to_string(),
+        state_directory: composition.state_dir.join("api-state"),
+        // Serve the same durable database the CLI wrote — not a shadow copy.
+        store_path: Some(composition.state_dir.join(composition::STATE_DB_FILE)),
+        provider: composition.provider_label(),
+        model: composition.model.clone(),
+        policy: composition.api_policy_snapshot(),
+        tokens: vec![token],
+        allowed_origins: Vec::new(),
+        limits: ApiLimits::default(),
+        backend,
+    };
+    let mut api = ApiServer::start(config)
+        .map_err(|err| CliError::runtime(format!("cannot start the local API: {err}")))?;
+
+    eprintln!("bollo: local API at {}", api.base_url());
+    eprintln!(
+        "bollo: BOLLO_TOKEN={secret}   (showed once; a client that forgets it must restart the daemon)"
+    );
+    eprintln!(
+        "bollo: Ctrl-C stops the daemon; runs through this endpoint decline with \
+         'no run backend' until the P2 runtime bridge is wired"
+    );
+
+    // Ctrl-C maps to exit 130 after best-effort cleanup, same contract as a run.
+    let cancel = CancellationToken::new();
+    install_cancel_handler(cancel.clone());
+    while !cancel.is_cancelled() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    api.stop();
+    Ok(130)
 }
 
 // --- runs --------------------------------------------------------------------

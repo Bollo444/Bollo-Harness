@@ -216,8 +216,10 @@ crashes:
 ## 9. What is not implemented yet
 
 - **Packaging and release**: no installer, SBOM or signed artifact (backlog BL-13).
-- **Local API is not wired into the CLI**: `bollo-api` exists and passes its tests, but no
-  `bollo api`/`serve` command starts it (BH-017).
+- **Local API run lane is not wired**: `bollo serve` starts the loopback HTTP API against
+  the CLI's durable store, but runs through the endpoint decline loudly (`no run
+  backend`) because the P2 runtime bridge does not exist yet (BH-017); the full
+  OpenAPI/SSE conformance run in AT-017 has not been executed.
 - **Remote MCP, ACP client, sub-agents**: designed, not built (BH-018/019/020).
 - **macOS and Linux enforcement**: the container backend is Windows-only; the probe reports
   unavailable elsewhere and workspace mode refuses rather than pretending.
